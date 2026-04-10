@@ -3,56 +3,49 @@
 from __future__ import annotations
 
 import subprocess
-import threading
+from enum import Enum, auto
 
 import pyperclip
 
+from luduan.log import get_logger
 
-# AppleScript: save frontmost app, set clipboard, refocus, paste, restore
-_PASTE_APPLESCRIPT = """\
-tell application "System Events"
-    set frontApp to name of first application process whose frontmost is true
-end tell
-do shell script "python3 -c \\"import pyperclip; pyperclip.copy({escaped_text})\\"" 2>/dev/null
-tell application frontApp to activate
-delay 0.15
-tell application "System Events"
-    keystroke "v" using {command down}
-end tell
-"""
+log = get_logger(__name__)
 
-_PASTE_APPLESCRIPT_V2 = """\
-set theText to {escaped_text}
-set the clipboard to theText
-tell application "System Events"
-    keystroke "v" using command down
-end tell
-"""
+# System Settings URL for the Accessibility pane (macOS Ventura+)
+_ACCESSIBILITY_SETTINGS_URL = (
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+)
+
+
+class PasteResult(Enum):
+    OK = auto()
+    NO_ACCESSIBILITY = auto()   # error 1002 — permission not granted
+    FAILED = auto()             # other osascript error
 
 
 class TextOutput:
     """Pastes *text* into the active macOS app.
 
     Strategy:
-    1. Copy text to clipboard
+    1. Copy text to clipboard (always — guaranteed fallback)
     2. Use AppleScript to send Cmd+V to the currently focused app
-    3. If AppleScript fails, leave text in clipboard and return False
-       (caller should show a notification)
+    3. Distinguish between a missing Accessibility permission (fixable)
+       and other failures so the caller can show the right message.
     """
 
-    def paste(self, text: str) -> bool:
-        """Paste *text* into the active app.
+    def paste(self, text: str) -> PasteResult:
+        """Paste *text* into the active app. Always copies to clipboard first.
 
-        Returns True on success, False on failure (text still in clipboard).
+        Returns a PasteResult indicating success or the failure reason.
         """
         if not text.strip():
-            return True
+            return PasteResult.OK
 
-        # Always put text in clipboard as a guaranteed fallback
         try:
             pyperclip.copy(text)
         except Exception:
-            return False
+            log.exception("Failed to copy to clipboard")
+            return PasteResult.FAILED
 
         return self._applescript_paste(text)
 
@@ -64,12 +57,16 @@ class TextOutput:
         except Exception:
             return False
 
+    @staticmethod
+    def open_accessibility_settings() -> None:
+        """Open System Settings → Privacy & Security → Accessibility."""
+        subprocess.run(["open", _ACCESSIBILITY_SETTINGS_URL], check=False)
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _applescript_paste(self, text: str) -> bool:
-        # Escape text for AppleScript: backslash-escape backslashes and quotes
+    def _applescript_paste(self, text: str) -> PasteResult:
         escaped = text.replace("\\", "\\\\").replace('"', '\\"')
         script = f'''\
 set theText to "{escaped}"
@@ -86,6 +83,18 @@ end tell
                 text=True,
                 timeout=5,
             )
-            return result.returncode == 0
         except Exception:
-            return False
+            log.exception("osascript subprocess error")
+            return PasteResult.FAILED
+
+        if result.returncode == 0:
+            return PasteResult.OK
+
+        stderr = result.stderr.strip()
+        log.warning("osascript failed (rc=%d): %s", result.returncode, stderr)
+
+        # Error 1002 = Accessibility permission not granted
+        if "1002" in stderr or "not allowed to send keystrokes" in stderr:
+            return PasteResult.NO_ACCESSIBILITY
+
+        return PasteResult.FAILED

@@ -12,7 +12,7 @@ import rumps
 from luduan import config as cfg
 from luduan.audio import AudioRecorder
 from luduan.log import LOG_PATH, get_logger
-from luduan.output import TextOutput
+from luduan.output import PasteResult, TextOutput
 from luduan.postprocessor import Postprocessor
 from luduan.transcriber import Transcriber
 
@@ -67,6 +67,7 @@ class LuduanApp(rumps.App):
         )
         self._output = TextOutput()
         self._partial_text = ""
+        self._accessibility_ok = True  # flips to False on first error 1002
 
         # Menu
         self._toggle_item = rumps.MenuItem("Start Recording", callback=self._on_toggle)
@@ -79,6 +80,10 @@ class LuduanApp(rumps.App):
             else "LLM: disabled"
         )
         self._ollama_item = rumps.MenuItem(ollama_label, callback=None)
+        self._fix_perms_item = rumps.MenuItem(
+            "⚠️  Grant Accessibility Permission…",
+            callback=self._on_fix_accessibility,
+        )
 
         self.menu = [
             self._toggle_item,
@@ -92,6 +97,9 @@ class LuduanApp(rumps.App):
 
         # Start global hotkey listener
         self._start_hotkey_listener()
+
+        # Check Accessibility on startup so the warning shows immediately
+        threading.Timer(2.0, self._check_accessibility).start()
 
     # ------------------------------------------------------------------
     # Recording toggle
@@ -171,17 +179,20 @@ class LuduanApp(rumps.App):
             log.info("Ollama skipped — using raw transcript")
 
         # Output
-        success = self._output.paste(cleaned_text)
-        if not success:
+        paste_result = self._output.paste(cleaned_text)
+        if paste_result == PasteResult.OK:
+            log.info("Text pasted successfully")
+        elif paste_result == PasteResult.NO_ACCESSIBILITY:
+            log.warning("Paste blocked — Accessibility permission not granted")
+            self._on_accessibility_denied()
+        else:
             log.warning("Auto-paste failed — text left in clipboard")
             rumps.notification(
                 title="Luduan",
                 subtitle="Copied to clipboard",
-                message="Could not auto-paste — text is in your clipboard.",
+                message="Auto-paste failed. Text is in your clipboard.",
                 sound=False,
             )
-        else:
-            log.info("Text pasted successfully")
 
         self._set_state(State.IDLE)
 
@@ -227,10 +238,49 @@ class LuduanApp(rumps.App):
     def _on_show_log(self, _sender) -> None:
         subprocess.run(["open", str(LOG_PATH)], check=False)
 
+    def _on_fix_accessibility(self, _sender) -> None:
+        TextOutput.open_accessibility_settings()
+
     def _on_quit(self, _sender) -> None:
         if self._recorder.is_recording:
             self._recorder.stop()
         rumps.quit_application()
+
+    # ------------------------------------------------------------------
+    # Accessibility permission helpers
+    # ------------------------------------------------------------------
+
+    def _check_accessibility(self) -> None:
+        """Probe for Accessibility permission by doing a dry-run paste of empty string."""
+        result = subprocess.run(
+            ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode != 0 and "1002" in result.stderr:
+            log.warning("Accessibility permission not granted — adding Fix menu item")
+            self._show_accessibility_warning()
+
+    def _on_accessibility_denied(self) -> None:
+        """Called when a real paste attempt is blocked by missing Accessibility."""
+        if self._accessibility_ok:
+            self._accessibility_ok = False
+            self._show_accessibility_warning()
+
+    def _show_accessibility_warning(self) -> None:
+        """Insert the Fix Permissions item into the menu and notify the user."""
+        # Insert warning item if not already present
+        if "⚠️  Grant Accessibility Permission…" not in self.menu:
+            self.menu.insert_before("Show Log", self._fix_perms_item)
+
+        rumps.notification(
+            title="Luduan — Action Required",
+            subtitle="Accessibility permission needed",
+            message=(
+                "Luduan can't paste text without Accessibility access. "
+                "Click '⚠️ Grant Accessibility Permission…' in the menu."
+            ),
+            sound=False,
+        )
 
     # ------------------------------------------------------------------
     # Global hotkey listener
