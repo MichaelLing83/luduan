@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
 from enum import Enum, auto
+from pathlib import Path
 
 import rumps
 
@@ -17,6 +19,23 @@ from luduan.postprocessor import Postprocessor
 from luduan.transcriber import Transcriber
 
 log = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Icon helpers
+# ---------------------------------------------------------------------------
+
+def _find_resource(filename: str) -> str | None:
+    """Return path to a file in the .app bundle Resources dir, or None."""
+    # When running inside Luduan.app the executable is in Contents/MacOS/
+    exe = Path(sys.executable)
+    candidates = [
+        exe.parent.parent / "Resources" / filename,   # inside .app bundle
+        Path(__file__).parent.parent.parent / "build" / filename,  # dev tree
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +54,6 @@ _ICONS = {
     State.PROCESSING: "⏳",
 }
 
-
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -44,7 +62,11 @@ class LuduanApp(rumps.App):
     """macOS menu bar application for Luduan."""
 
     def __init__(self, conf: dict) -> None:
-        super().__init__("🎙", quit_button=None)
+        menubar_icon = _find_resource("menubar_icon.png")
+        if menubar_icon:
+            super().__init__("", icon=menubar_icon, template=True, quit_button=None)
+        else:
+            super().__init__("🎙", quit_button=None)
 
         self._conf = conf
         self._state = State.IDLE
@@ -213,8 +235,12 @@ class LuduanApp(rumps.App):
     def _set_state(self, state: State) -> None:
         with self._lock:
             self._state = state
-        icon = _ICONS[state]
-        self.title = icon
+        # When using an image icon, show state via the title overlay;
+        # when using emoji fallback, replace the title entirely.
+        if self.icon:
+            self.title = "" if state == State.IDLE else _ICONS[state]
+        else:
+            self.title = _ICONS[state]
         if state == State.IDLE:
             self._toggle_item.title = "Start Recording"
             self._update_status("Ready")

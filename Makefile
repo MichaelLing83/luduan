@@ -22,6 +22,10 @@ app:
 	@python3 -m venv $(VENV) --copies
 	@$(VENV)/bin/pip install --quiet -e . mlx-whisper
 
+	@# Icons
+	@cp build/AppIcon.icns $(CONTENTS)/Resources/AppIcon.icns
+	@cp build/menubar_icon.png $(CONTENTS)/Resources/menubar_icon.png
+
 	@# Launcher executable
 	@cp build/launcher.sh $(CONTENTS)/MacOS/$(APP_NAME)
 	@chmod +x $(CONTENTS)/MacOS/$(APP_NAME)
