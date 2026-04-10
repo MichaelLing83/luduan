@@ -18,20 +18,28 @@ Uses [Whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) (Ap
 
 ## Installation
 
-```bash
-# Install in a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
+### Build as a macOS app (recommended)
 
-## Usage
+Building as a standalone `.app` means you grant permissions to **Luduan** specifically — not to Terminal.
 
 ```bash
-luduan
+make app          # builds dist/Luduan.app
+make install      # copies to /Applications/Luduan.app
 ```
 
-On first run, Luduan will guide you through microphone permissions and Ollama model selection.
+After installing:
+1. Open **System Settings → Privacy & Security → Input Monitoring**
+2. Add **Luduan** and enable it (required for the global hotkey)
+3. Launch Luduan from Spotlight or double-click in `/Applications`
+
+### Run directly from terminal (dev mode)
+
+```bash
+make dev          # set up .venv
+make run          # run without building the app
+```
+
+> Note: running from terminal requires granting Input Monitoring to **Terminal** instead of Luduan.
 
 ### Hotkey
 - **Cmd+Shift+Space** — toggle recording on/off

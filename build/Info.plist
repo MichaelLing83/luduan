@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.luduan.app</string>
+    <key>CFBundleName</key>
+    <string>Luduan</string>
+    <key>CFBundleDisplayName</key>
+    <string>Luduan</string>
+    <key>CFBundleExecutable</key>
+    <string>Luduan</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <!-- Hide Dock icon — pure menu bar app -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Permission usage descriptions shown in macOS dialogs -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Luduan records your voice to transcribe speech to text.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Luduan uses Apple Events to paste transcribed text into the active app.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>
