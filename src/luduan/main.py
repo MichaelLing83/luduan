@@ -356,6 +356,15 @@ def first_run_check(conf: dict) -> None:
 
 def main() -> None:
     conf = cfg.load()
+
+    # Ensure HuggingFace models land in our config dir, not ~/.cache/huggingface
+    # which may be a broken symlink to an unmounted volume.
+    import os
+    from luduan.log import LOG_PATH
+    hf_home = str(cfg.CONFIG_DIR / "models")
+    os.makedirs(hf_home, exist_ok=True)
+    os.environ.setdefault("HF_HOME", hf_home)
+
     log.info("Luduan starting — log: %s", LOG_PATH)
     log.info("Config: whisper=%s  ollama=%s/%s  hotkey=%s",
              conf["whisper"]["model"],

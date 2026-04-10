@@ -10,4 +10,9 @@ if [[ ! -f "$PYTHON" ]]; then
     exit 1
 fi
 
+# Redirect HuggingFace model cache to a local path so it works even when
+# external volumes (where ~/.cache/huggingface may be symlinked) are not mounted.
+export HF_HOME="$HOME/.config/luduan/models"
+mkdir -p "$HF_HOME"
+
 exec "$PYTHON" -m luduan.main

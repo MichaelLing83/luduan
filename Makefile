@@ -50,7 +50,8 @@ uninstall:
 # ── Dev (run without building the app) ───────────────────────────────────────
 
 run:
-	@.venv/bin/python -m luduan.main
+	@mkdir -p ~/.config/luduan/models
+	@HF_HOME=~/.config/luduan/models .venv/bin/python -m luduan.main
 
 dev:
 	@python3 -m venv .venv --copies 2>/dev/null || true
