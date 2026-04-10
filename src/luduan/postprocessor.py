@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import httpx
 
+from luduan.log import get_logger
+
+log = get_logger(__name__)
+
 
 _SYSTEM_PROMPT = """\
 You are a post-processing assistant for speech-to-text transcriptions.
@@ -50,10 +54,11 @@ class Postprocessor:
             return text, False
 
         try:
+            log.debug("Sending to Ollama model=%s", self.model)
             cleaned = self._call_ollama(text)
             return cleaned, True
         except Exception:
-            # Silently fall back to raw transcript
+            log.exception("Ollama post-processing failed — using raw transcript")
             return text, False
 
     def is_available(self) -> bool:

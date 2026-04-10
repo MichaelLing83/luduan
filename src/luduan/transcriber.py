@@ -7,6 +7,10 @@ from collections.abc import Callable
 
 import numpy as np
 
+from luduan.log import get_logger
+
+log = get_logger(__name__)
+
 
 # mlx-whisper model name mapping (matches whisper model sizes)
 _MODEL_MAP = {
@@ -54,6 +58,8 @@ class Transcriber:
         audio_f32 = _ensure_float32(audio, sample_rate)
 
         with self._lock:
+            log.debug("Running mlx-whisper: model=%s language=%s samples=%d",
+                      self.model_name, self.language, len(audio_f32))
             result = mlx_whisper.transcribe(
                 audio_f32,
                 path_or_hf_repo=self.model_name,

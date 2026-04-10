@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import threading
 from enum import Enum, auto
@@ -10,9 +11,12 @@ import rumps
 
 from luduan import config as cfg
 from luduan.audio import AudioRecorder
+from luduan.log import LOG_PATH, get_logger
 from luduan.output import TextOutput
 from luduan.postprocessor import Postprocessor
 from luduan.transcriber import Transcriber
+
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +86,7 @@ class LuduanApp(rumps.App):
             self._status_item,
             self._ollama_item,
             None,
+            rumps.MenuItem("Show Log", callback=self._on_show_log),
             rumps.MenuItem("Quit Luduan", callback=self._on_quit),
         ]
 
@@ -108,7 +113,9 @@ class LuduanApp(rumps.App):
         self._partial_text = ""
         try:
             self._recorder.start()
+            log.info("Recording started")
         except Exception as exc:
+            log.exception("Failed to start microphone")
             self._set_state(State.IDLE)
             rumps.notification(
                 title="Luduan",
@@ -119,6 +126,7 @@ class LuduanApp(rumps.App):
 
     def _stop_recording(self) -> None:
         self._set_state(State.PROCESSING)
+        log.info("Recording stopped — starting transcription")
         # Run transcription in a background thread to keep the UI responsive
         thread = threading.Thread(target=self._process_audio, daemon=True)
         thread.start()
@@ -127,15 +135,20 @@ class LuduanApp(rumps.App):
         audio = self._recorder.stop()
 
         if len(audio) == 0:
+            log.warning("No audio captured")
             self._set_state(State.IDLE)
             return
+
+        log.info("Audio captured: %.1f seconds", len(audio) / self._conf["audio"]["sample_rate"])
 
         try:
             raw_text = self._transcriber.transcribe(
                 audio,
                 sample_rate=self._conf["audio"]["sample_rate"],
             )
+            log.info("Whisper transcript: %r", raw_text)
         except Exception as exc:
+            log.exception("Transcription failed")
             self._set_state(State.IDLE)
             rumps.notification(
                 title="Luduan",
@@ -146,21 +159,29 @@ class LuduanApp(rumps.App):
             return
 
         if not raw_text:
+            log.info("Empty transcript — nothing to output")
             self._set_state(State.IDLE)
             return
 
         # LLM post-processing
         cleaned_text, used_llm = self._postprocessor.process(raw_text)
+        if used_llm:
+            log.info("Ollama cleaned text: %r", cleaned_text)
+        else:
+            log.info("Ollama skipped — using raw transcript")
 
         # Output
         success = self._output.paste(cleaned_text)
         if not success:
+            log.warning("Auto-paste failed — text left in clipboard")
             rumps.notification(
                 title="Luduan",
                 subtitle="Copied to clipboard",
                 message="Could not auto-paste — text is in your clipboard.",
                 sound=False,
             )
+        else:
+            log.info("Text pasted successfully")
 
         self._set_state(State.IDLE)
 
@@ -202,6 +223,9 @@ class LuduanApp(rumps.App):
 
     def _on_toggle(self, _sender) -> None:
         self.toggle_recording()
+
+    def _on_show_log(self, _sender) -> None:
+        subprocess.run(["open", str(LOG_PATH)], check=False)
 
     def _on_quit(self, _sender) -> None:
         if self._recorder.is_recording:
@@ -312,6 +336,7 @@ def first_run_check(conf: dict) -> None:
         enabled=True,
     )
     if not pp.is_available():
+        log.warning("Ollama not reachable at %s", conf["ollama"]["host"])
         rumps.notification(
             title="Luduan",
             subtitle="Ollama not running",
@@ -321,6 +346,8 @@ def first_run_check(conf: dict) -> None:
             ),
             sound=False,
         )
+    else:
+        log.info("Ollama reachable at %s, model=%s", conf["ollama"]["host"], conf["ollama"]["model"])
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +356,11 @@ def first_run_check(conf: dict) -> None:
 
 def main() -> None:
     conf = cfg.load()
+    log.info("Luduan starting — log: %s", LOG_PATH)
+    log.info("Config: whisper=%s  ollama=%s/%s  hotkey=%s",
+             conf["whisper"]["model"],
+             conf["ollama"]["host"], conf["ollama"]["model"],
+             conf["hotkey"]["keys"])
     app = LuduanApp(conf)
 
     # Defer first-run check until after app starts
