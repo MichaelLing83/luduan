@@ -23,7 +23,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "whisper": {
         "model": "base",
-        "language": "en",
+        "language": "",  # empty string = auto-detect; set to e.g. "en", "zh", "sv", "fr" to pin
     },
     "ollama": {
         "host": "http://localhost:11434",

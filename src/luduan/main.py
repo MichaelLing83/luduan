@@ -106,12 +106,14 @@ class LuduanApp(rumps.App):
             "⚠️  Grant Accessibility Permission…",
             callback=self._on_fix_accessibility,
         )
+        self._lang_menu = self._build_language_menu(conf["whisper"].get("language") or "auto")
 
         self.menu = [
             self._toggle_item,
             None,  # separator
             self._status_item,
             self._ollama_item,
+            self._lang_menu,
             None,
             rumps.MenuItem("Show Log", callback=self._on_show_log),
             rumps.MenuItem("Quit Luduan", callback=self._on_quit),
@@ -271,6 +273,46 @@ class LuduanApp(rumps.App):
         if self._recorder.is_recording:
             self._recorder.stop()
         rumps.quit_application()
+
+    # ------------------------------------------------------------------
+    # Language menu
+    # ------------------------------------------------------------------
+
+    # (code, display label)
+    _LANGUAGES: list[tuple[str, str]] = [
+        ("auto",  "Auto-detect"),
+        ("zh",    "Mandarin (中文)"),
+        ("en",    "English"),
+        ("sv",    "Swedish (Svenska)"),
+        ("fr",    "French (Français)"),
+    ]
+
+    def _build_language_menu(self, current: str) -> rumps.MenuItem:
+        submenu = rumps.MenuItem("Language")
+        for code, label in self._LANGUAGES:
+            item = rumps.MenuItem(label, callback=self._on_language_select)
+            item.state = 1 if code == current else 0
+            submenu.add(item)
+        return submenu
+
+    def _on_language_select(self, sender: rumps.MenuItem) -> None:
+        # Find the matching code for the clicked label
+        code = next(
+            (c for c, lbl in self._LANGUAGES if lbl == sender.title),
+            "auto",
+        )
+        # Uncheck all, check selected
+        for item in self._lang_menu.values():
+            item.state = 1 if item.title == sender.title else 0
+
+        # Apply to transcriber immediately (no restart needed)
+        self._transcriber.language = None if code == "auto" else code
+        log.info("Language changed to %s", code)
+
+        # Persist to config
+        self._conf["whisper"]["language"] = "" if code == "auto" else code
+        cfg.save(self._conf)
+        log.info("Config saved")
 
     # ------------------------------------------------------------------
     # Accessibility permission helpers
