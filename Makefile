@@ -26,8 +26,9 @@ app:
 	@cp build/AppIcon.icns $(CONTENTS)/Resources/AppIcon.icns
 	@cp build/menubar_icon.png $(CONTENTS)/Resources/menubar_icon.png
 
-	@# Launcher executable
-	@cp build/launcher.sh $(CONTENTS)/MacOS/$(APP_NAME)
+	@# Compiled launcher stub (gives the process Luduan's identity and icon)
+	@echo "  Compiling launcher stub …"
+	@cc -O2 -o $(CONTENTS)/MacOS/$(APP_NAME) build/launcher.c
 	@chmod +x $(CONTENTS)/MacOS/$(APP_NAME)
 
 	@echo "✅ $(APP_BUNDLE)"
