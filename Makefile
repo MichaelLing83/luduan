@@ -40,6 +40,11 @@ install: $(APP_BUNDLE)
 	@echo "→ Installing to /Applications …"
 	@rm -rf /Applications/$(APP_NAME).app
 	@cp -r $(APP_BUNDLE) /Applications/
+	@# Force Launch Services to pick up the new icon immediately
+	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+	    -f /Applications/$(APP_NAME).app
+	@touch /Applications/$(APP_NAME).app
+	@killall Dock 2>/dev/null || true
 	@echo "✅ /Applications/$(APP_NAME).app"
 	@echo ""
 	@echo "Next steps:"

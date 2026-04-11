@@ -319,36 +319,51 @@ class LuduanApp(rumps.App):
     # ------------------------------------------------------------------
 
     def _check_accessibility(self) -> None:
-        """Probe for Accessibility permission by doing a dry-run paste of empty string."""
+        """Probe for Accessibility permission by doing a dry-run keystroke."""
         result = subprocess.run(
             ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
             capture_output=True, text=True, timeout=3,
         )
         if result.returncode != 0 and "1002" in result.stderr:
-            log.warning("Accessibility permission not granted — adding Fix menu item")
-            self._show_accessibility_warning()
+            log.warning("Accessibility permission not granted — showing dialog")
+            self._show_accessibility_dialog(on_paste_fail=False)
 
     def _on_accessibility_denied(self) -> None:
         """Called when a real paste attempt is blocked by missing Accessibility."""
         if self._accessibility_ok:
             self._accessibility_ok = False
-            self._show_accessibility_warning()
+            self._show_accessibility_dialog(on_paste_fail=True)
 
     def _show_accessibility_warning(self) -> None:
-        """Insert the Fix Permissions item into the menu and notify the user."""
-        # Insert warning item if not already present
+        """Insert ⚠️ menu item (kept for reference; dialog is primary UX)."""
         if "⚠️  Grant Accessibility Permission…" not in self.menu:
             self.menu.insert_before("Show Log", self._fix_perms_item)
 
-        rumps.notification(
-            title="Luduan — Action Required",
-            subtitle="Accessibility permission needed",
-            message=(
-                "Luduan can't paste text without Accessibility access. "
-                "Click '⚠️ Grant Accessibility Permission…' in the menu."
-            ),
-            sound=False,
+    def _show_accessibility_dialog(self, *, on_paste_fail: bool) -> None:
+        """Show a native macOS dialog with an 'Open System Settings' button."""
+        self._show_accessibility_warning()  # also add the menu item
+
+        intro = (
+            "Luduan tried to paste transcribed text but was blocked.\n\n"
+            if on_paste_fail
+            else ""
         )
+        script = f'''\
+display dialog "{intro}Luduan needs Accessibility permission to paste text into other apps.
+
+Open System Settings → Privacy & Security → Accessibility, then add and enable Luduan." ¬
+    buttons {{"Later", "Open System Settings"}} ¬
+    default button "Open System Settings" ¬
+    with title "Luduan — Permission Required" ¬
+    with icon caution
+'''
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=30,
+        )
+        if "Open System Settings" in result.stdout:
+            TextOutput.open_accessibility_settings()
+            log.info("Opened Accessibility settings at user request")
 
     # ------------------------------------------------------------------
     # Global hotkey listener
