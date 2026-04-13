@@ -29,11 +29,26 @@ def _find_resource(filename: str) -> str | None:
     """Return path to a file in the .app bundle Resources dir, or None."""
     exe = Path(sys.executable)
     module = Path(__file__).resolve()
-    candidates = [
-        exe.parent.parent.parent / filename,          # bundled venv: .../Resources/venv/bin/python
-        module.parents[5] / filename,                 # bundled site-packages: .../Resources/venv/lib/.../luduan/main.py
-        module.parents[2] / "build" / filename,       # dev tree: .../src/luduan/main.py -> repo/build
-    ]
+    candidates: list[Path] = []
+
+    # PyInstaller bundle: executable in .../Contents/MacOS/Luduan,
+    # resources in .../Contents/Resources/
+    candidates.append(exe.parent.parent / "Resources" / filename)
+
+    # Bundled venv app: interpreter in .../Contents/Resources/venv/bin/python,
+    # resources in .../Contents/Resources/
+    candidates.append(exe.parent.parent.parent / filename)
+
+    # PyInstaller also exposes an extraction/resource dir via sys._MEIPASS.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / filename)
+
+    # Dev tree: .../src/luduan/main.py -> repo/build/
+    for parent in module.parents:
+        build_path = parent / "build" / filename
+        candidates.append(build_path)
+
     for p in candidates:
         if p.exists():
             return str(p)
