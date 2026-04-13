@@ -11,25 +11,9 @@ VENV       := $(CONTENTS)/Resources/venv
 app:
 	@echo "→ Building $(APP_NAME).app …"
 	@rm -rf $(APP_BUNDLE)
-	@mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Resources
-
-	@# Metadata
-	@cp build/Info.plist $(CONTENTS)/Info.plist
-	@printf 'APPL????' > $(CONTENTS)/PkgInfo
-
-	@# Bundled Python environment
-	@echo "  Creating bundled venv …"
-	@python3 -m venv $(VENV) --copies
-	@$(VENV)/bin/pip install --quiet -e . mlx-whisper
-
-	@# Icons
-	@cp build/AppIcon.icns $(CONTENTS)/Resources/AppIcon.icns
-	@cp build/menubar_icon.png $(CONTENTS)/Resources/menubar_icon.png
-
-	@# Compiled launcher stub (gives the process Luduan's identity and icon)
-	@echo "  Compiling launcher stub …"
-	@cc -O2 -o $(CONTENTS)/MacOS/$(APP_NAME) build/launcher.c
-	@chmod +x $(CONTENTS)/MacOS/$(APP_NAME)
+	@python3 -m venv .venv --copies 2>/dev/null || true
+	@.venv/bin/python -m pip install --quiet -e . pyinstaller
+	@.venv/bin/pyinstaller --noconfirm Luduan.spec
 
 	@echo "✅ $(APP_BUNDLE)"
 	@echo "   → make install   to copy to /Applications"
@@ -70,5 +54,5 @@ dev:
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
 clean:
-	@rm -rf $(DIST_DIR)
+	@rm -rf $(DIST_DIR) build/Luduan
 	@echo "Cleaned."

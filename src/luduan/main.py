@@ -9,6 +9,7 @@ import threading
 from enum import Enum, auto
 from pathlib import Path
 
+import AppKit
 import rumps
 
 from luduan import config as cfg
@@ -65,9 +66,9 @@ class LuduanApp(rumps.App):
     def __init__(self, conf: dict) -> None:
         menubar_icon = _find_resource("menubar_icon.png")
         if menubar_icon:
-            super().__init__("", icon=menubar_icon, template=False, quit_button=None)
+            super().__init__("L", icon=menubar_icon, template=False, quit_button=None)
         else:
-            super().__init__("🎙", quit_button=None)
+            super().__init__("L", quit_button=None)
 
         self._conf = conf
         self._state = State.IDLE
@@ -241,9 +242,9 @@ class LuduanApp(rumps.App):
         # When using an image icon, show state via the title overlay;
         # when using emoji fallback, replace the title entirely.
         if self.icon:
-            self.title = "" if state == State.IDLE else _ICONS[state]
+            self.title = "L" if state == State.IDLE else _ICONS[state]
         else:
-            self.title = _ICONS[state]
+            self.title = "L" if state == State.IDLE else _ICONS[state]
         if state == State.IDLE:
             self._toggle_item.title = "Start Recording"
             self._update_status("Ready")
@@ -504,6 +505,13 @@ def main() -> None:
              conf["whisper"]["model"],
              conf["ollama"]["host"], conf["ollama"]["model"],
              conf["hotkey"]["keys"])
+
+    # Force menu bar app behavior even if macOS ignores LSUIElement for the
+    # embedded Python runtime. This hides the Dock icon and keeps Luduan in the
+    # status bar where the controls live.
+    ns_app = AppKit.NSApplication.sharedApplication()
+    ns_app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+
     app = LuduanApp(conf)
 
     # Defer first-run check until after app starts
