@@ -26,11 +26,12 @@ log = get_logger(__name__)
 
 def _find_resource(filename: str) -> str | None:
     """Return path to a file in the .app bundle Resources dir, or None."""
-    # When running inside Luduan.app the executable is in Contents/MacOS/
     exe = Path(sys.executable)
+    module = Path(__file__).resolve()
     candidates = [
-        exe.parent.parent / "Resources" / filename,   # inside .app bundle
-        Path(__file__).parent.parent.parent / "build" / filename,  # dev tree
+        exe.parent.parent.parent / filename,          # bundled venv: .../Resources/venv/bin/python
+        module.parents[5] / filename,                 # bundled site-packages: .../Resources/venv/lib/.../luduan/main.py
+        module.parents[2] / "build" / filename,       # dev tree: .../src/luduan/main.py -> repo/build
     ]
     for p in candidates:
         if p.exists():
@@ -64,7 +65,7 @@ class LuduanApp(rumps.App):
     def __init__(self, conf: dict) -> None:
         menubar_icon = _find_resource("menubar_icon.png")
         if menubar_icon:
-            super().__init__("", icon=menubar_icon, template=True, quit_button=None)
+            super().__init__("", icon=menubar_icon, template=False, quit_button=None)
         else:
             super().__init__("🎙", quit_button=None)
 
