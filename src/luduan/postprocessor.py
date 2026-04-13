@@ -12,10 +12,12 @@ log = get_logger(__name__)
 _SYSTEM_PROMPT = """\
 You are a post-processing assistant for speech-to-text transcriptions.
 Your job is to fix grammar, punctuation, and capitalization in the given transcript.
+When nearby text from the active app is provided, treat it only as local context
+for resolving names, acronyms, casing, and terminology.
 Do NOT change the meaning, add new content, or remove information.
+Do NOT copy arbitrary phrases from the context unless they clearly disambiguate
+what the user said.
 Return ONLY the corrected text, no explanations or extra formatting."""
-
-_USER_PROMPT_TEMPLATE = "Please clean up this transcript:\n\n{text}"
 
 
 class Postprocessor:
@@ -43,7 +45,13 @@ class Postprocessor:
         self.enabled = enabled
         self.timeout = timeout
 
-    def process(self, text: str) -> tuple[str, bool]:
+    def process(
+        self,
+        text: str,
+        *,
+        context_before_cursor: str | None = None,
+        app_name: str | None = None,
+    ) -> tuple[str, bool]:
         """Clean up *text* with the LLM.
 
         Returns:
@@ -55,7 +63,11 @@ class Postprocessor:
 
         try:
             log.debug("Sending to Ollama model=%s", self.model)
-            cleaned = self._call_ollama(text)
+            cleaned = self._call_ollama(
+                text,
+                context_before_cursor=context_before_cursor,
+                app_name=app_name,
+            )
             return cleaned, True
         except Exception:
             log.exception("Ollama post-processing failed — using raw transcript")
@@ -74,12 +86,25 @@ class Postprocessor:
     # Internal
     # ------------------------------------------------------------------
 
-    def _call_ollama(self, text: str) -> str:
+    def _call_ollama(
+        self,
+        text: str,
+        *,
+        context_before_cursor: str | None = None,
+        app_name: str | None = None,
+    ) -> str:
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _USER_PROMPT_TEMPLATE.format(text=text)},
+                {
+                    "role": "user",
+                    "content": _build_user_prompt(
+                        text,
+                        context_before_cursor=context_before_cursor,
+                        app_name=app_name,
+                    ),
+                },
             ],
             "stream": False,
         }
@@ -90,3 +115,24 @@ class Postprocessor:
 
         data = resp.json()
         return data["message"]["content"].strip()
+
+
+def _build_user_prompt(
+    text: str,
+    *,
+    context_before_cursor: str | None = None,
+    app_name: str | None = None,
+) -> str:
+    if not context_before_cursor:
+        return f"Please clean up this transcript:\n\n{text}"
+
+    context_label = f" in {app_name}" if app_name else ""
+    return (
+        "Please clean up this transcript.\n\n"
+        f"Transcript:\n{text}\n\n"
+        f"Text immediately before the cursor{context_label} "
+        "(context hint only, may be partial):\n"
+        f"{context_before_cursor}\n\n"
+        "Use the context only to improve names, acronyms, punctuation, and casing. "
+        "Return only the cleaned transcript to insert at the cursor."
+    )

@@ -7,6 +7,7 @@ Uses [Whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) (Ap
 - **Global hotkey** toggle (default: `Cmd+Shift+Space`) — press to start, press again to stop
 - **Streaming transcription** — Whisper processes audio in chunks as you speak
 - **LLM post-processing** — Ollama cleans up grammar and punctuation
+- **Optional app context** — can read nearby text before the cursor to help with names and acronyms
 - **Auto-paste** — transcribed text is pasted directly into the currently focused app
 - **Menu bar app** — lives in your macOS menu bar with status icons
 - **Fully local** — no cloud, all processing on-device
@@ -44,6 +45,7 @@ make run          # run without building the app
 ### Hotkey
 - **Cmd+Shift+Space** — toggle recording on/off
 - Menu bar icon shows current state: idle 🎙 / recording 🔴 / processing ⏳
+- Menu bar also lets you pick **Language** and toggle **Use App Context**
 
 ## Configuration
 
@@ -55,7 +57,7 @@ keys = ["cmd", "shift", "space"]
 
 [whisper]
 model = "base"
-language = "en"
+language = ""
 
 [ollama]
 host = "http://localhost:11434"
@@ -65,4 +67,8 @@ enabled = true
 [audio]
 sample_rate = 16000
 channels = 1
+
+[context]
+enabled = false
+max_chars = 500
 ```

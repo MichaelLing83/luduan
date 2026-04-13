@@ -34,6 +34,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sample_rate": 16000,
         "channels": 1,
     },
+    "context": {
+        "enabled": False,
+        "max_chars": 500,
+    },
 }
 
 

@@ -14,6 +14,7 @@ import rumps
 
 from luduan import config as cfg
 from luduan.audio import AudioRecorder
+from luduan.context import AppContextReader
 from luduan.log import LOG_PATH, get_logger
 from luduan.output import PasteResult, TextOutput
 from luduan.postprocessor import Postprocessor
@@ -105,6 +106,7 @@ class LuduanApp(rumps.App):
             enabled=conf["ollama"]["enabled"],
         )
         self._output = TextOutput()
+        self._context_reader = AppContextReader()
         self._partial_text = ""
         self._accessibility_ok = True  # flips to False on first error 1002
 
@@ -119,6 +121,11 @@ class LuduanApp(rumps.App):
             else "LLM: disabled"
         )
         self._ollama_item = rumps.MenuItem(ollama_label, callback=None)
+        self._context_item = rumps.MenuItem(
+            "Use App Context",
+            callback=self._on_toggle_context,
+        )
+        self._context_item.state = 1 if conf["context"]["enabled"] else 0
         self._fix_perms_item = rumps.MenuItem(
             "⚠️  Grant Accessibility Permission…",
             callback=self._on_fix_accessibility,
@@ -131,6 +138,7 @@ class LuduanApp(rumps.App):
             self._status_item,
             self._ollama_item,
             self._lang_menu,
+            self._context_item,
             None,
             rumps.MenuItem("Show Log", callback=self._on_show_log),
             rumps.MenuItem("Quit Luduan", callback=self._on_quit),
@@ -212,8 +220,29 @@ class LuduanApp(rumps.App):
             self._set_state(State.IDLE)
             return
 
+        context_before_cursor = None
+        context_app_name = None
+        if self._conf["context"]["enabled"]:
+            snapshot = self._context_reader.capture(
+                max_chars=self._conf["context"]["max_chars"],
+            )
+            if snapshot is not None:
+                context_before_cursor = snapshot.before_cursor
+                context_app_name = snapshot.app_name
+                log.info(
+                    "Captured %d chars of app context from %s",
+                    len(context_before_cursor),
+                    context_app_name or "focused app",
+                )
+            else:
+                log.info("App context enabled but no focused text context was available")
+
         # LLM post-processing
-        cleaned_text, used_llm = self._postprocessor.process(raw_text)
+        cleaned_text, used_llm = self._postprocessor.process(
+            raw_text,
+            context_before_cursor=context_before_cursor,
+            app_name=context_app_name,
+        )
         if used_llm:
             log.info("Ollama cleaned text: %r", cleaned_text)
         else:
@@ -285,6 +314,16 @@ class LuduanApp(rumps.App):
 
     def _on_fix_accessibility(self, _sender) -> None:
         TextOutput.open_accessibility_settings()
+
+    def _on_toggle_context(self, _sender) -> None:
+        enabled = not bool(self._conf["context"]["enabled"])
+        self._conf["context"]["enabled"] = enabled
+        self._context_item.state = 1 if enabled else 0
+        cfg.save(self._conf)
+        log.info("App context mode %s", "enabled" if enabled else "disabled")
+
+        if enabled and not self._context_reader.is_trusted():
+            self._show_accessibility_dialog(on_paste_fail=False)
 
     def _on_quit(self, _sender) -> None:
         if self._recorder.is_recording:
@@ -368,7 +407,9 @@ class LuduanApp(rumps.App):
         script = f'''\
 display dialog "{intro}Luduan needs Accessibility permission to paste text into other apps.
 
-Open System Settings → Privacy & Security → Accessibility, then add and enable Luduan." ¬
+Open System Settings → Privacy & Security → Accessibility, then add and enable Luduan.
+
+That permission also lets Luduan read nearby text for context-aware dictation when you enable that option." ¬
     buttons {{"Later", "Open System Settings"}} ¬
     default button "Open System Settings" ¬
     with title "Luduan — Permission Required" ¬
