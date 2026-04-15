@@ -109,11 +109,15 @@ class LuduanApp(rumps.App):
         self._context_reader = AppContextReader()
         self._partial_text = ""
         self._accessibility_ok = True  # flips to False on first error 1002
+        self._offline_prepare_in_progress = False
+        self._offline_status_message = "Offline: checking…"
 
         # Menu
         self._toggle_item = rumps.MenuItem("Start Recording", callback=self._on_toggle)
         self._status_item = rumps.MenuItem("Ready", callback=None)
         self._status_item.set_callback(None)  # non-clickable status line
+        self._offline_status_item = rumps.MenuItem(self._offline_status_message, callback=None)
+        self._offline_status_item.set_callback(None)
 
         ollama_label = (
             f"LLM: {conf['ollama']['model']} (enabled)"
@@ -126,6 +130,10 @@ class LuduanApp(rumps.App):
             callback=self._on_toggle_context,
         )
         self._context_item.state = 1 if conf["context"]["enabled"] else 0
+        self._offline_item = rumps.MenuItem(
+            "Prepare Offline Use",
+            callback=self._on_prepare_offline,
+        )
         self._fix_perms_item = rumps.MenuItem(
             "⚠️  Grant Accessibility Permission…",
             callback=self._on_fix_accessibility,
@@ -139,6 +147,8 @@ class LuduanApp(rumps.App):
             self._ollama_item,
             self._lang_menu,
             self._context_item,
+            self._offline_item,
+            self._offline_status_item,
             None,
             rumps.MenuItem("Show Log", callback=self._on_show_log),
             rumps.MenuItem("Quit Luduan", callback=self._on_quit),
@@ -149,6 +159,7 @@ class LuduanApp(rumps.App):
 
         # Check Accessibility on startup so the warning shows immediately
         threading.Timer(2.0, self._check_accessibility).start()
+        threading.Thread(target=self._refresh_offline_status, daemon=True).start()
 
     # ------------------------------------------------------------------
     # Recording toggle
@@ -302,6 +313,10 @@ class LuduanApp(rumps.App):
     def _update_status(self, message: str) -> None:
         self._status_item.title = message
 
+    def _set_offline_status(self, message: str) -> None:
+        self._offline_status_message = message
+        self._offline_status_item.title = message
+
     # ------------------------------------------------------------------
     # Menu callbacks
     # ------------------------------------------------------------------
@@ -325,10 +340,101 @@ class LuduanApp(rumps.App):
         if enabled and not self._context_reader.is_trusted():
             self._show_accessibility_dialog(on_paste_fail=False)
 
+    def _on_prepare_offline(self, _sender) -> None:
+        if self._offline_prepare_in_progress:
+            return
+
+        with self._lock:
+            if self._state != State.IDLE:
+                rumps.notification(
+                    title="Luduan",
+                    subtitle="Busy",
+                    message="Wait until recording/transcription is finished before preparing offline use.",
+                    sound=False,
+                )
+                return
+
+        self._offline_prepare_in_progress = True
+        self._offline_item.title = "Preparing Offline Use…"
+        self._set_offline_status("Offline: preparing…")
+        thread = threading.Thread(target=self._prepare_offline_assets, daemon=True)
+        thread.start()
+
     def _on_quit(self, _sender) -> None:
         if self._recorder.is_recording:
             self._recorder.stop()
         rumps.quit_application()
+
+    def _prepare_offline_assets(self) -> None:
+        try:
+            self._offline_progress("Checking Whisper model…")
+            whisper_downloaded = self._transcriber.ensure_model_cached()
+            self._offline_progress(
+                "Whisper ready"
+                if whisper_downloaded
+                else "Whisper already cached"
+            )
+
+            self._offline_progress("Checking Ollama model…")
+            ollama_downloaded = self._postprocessor.ensure_model_available(
+                progress_callback=self._offline_progress,
+            )
+
+            parts = [
+                f"Whisper {'downloaded' if whisper_downloaded else 'already cached'}",
+            ]
+            if self._conf["ollama"]["enabled"]:
+                parts.append(
+                    f"Ollama {'downloaded' if ollama_downloaded else 'already cached'}"
+                )
+            else:
+                parts.append("Ollama skipped (disabled)")
+
+            message = "; ".join(parts)
+            log.info("Offline preparation complete: %s", message)
+            self._set_offline_status("Offline: ready")
+            rumps.notification(
+                title="Luduan",
+                subtitle="Offline preparation complete",
+                message=message,
+                sound=False,
+            )
+        except Exception as exc:
+            log.exception("Offline preparation failed")
+            self._set_offline_status("Offline: failed — see log")
+            rumps.notification(
+                title="Luduan",
+                subtitle="Offline preparation failed",
+                message=str(exc),
+                sound=False,
+            )
+        finally:
+            self._offline_prepare_in_progress = False
+            self._offline_item.title = "Prepare Offline Use"
+            with self._lock:
+                if self._state == State.IDLE:
+                    self._update_status("Ready")
+
+    def _offline_progress(self, message: str) -> None:
+        log.info("Offline preparation: %s", message)
+        self._set_offline_status(f"Offline: {message}")
+
+    def _refresh_offline_status(self) -> None:
+        try:
+            whisper_ready = self._transcriber.is_model_cached()
+            if self._conf["ollama"]["enabled"]:
+                ollama_ready = self._postprocessor.has_model_available()
+            else:
+                ollama_ready = True
+        except Exception:
+            log.exception("Failed to determine offline readiness")
+            self._set_offline_status("Offline: unknown")
+            return
+
+        if whisper_ready and ollama_ready:
+            self._set_offline_status("Offline: ready")
+        else:
+            self._set_offline_status("Offline: not prepared")
 
     # ------------------------------------------------------------------
     # Language menu

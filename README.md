@@ -45,7 +45,7 @@ make run          # run without building the app
 ### Hotkey
 - **Cmd+Shift+Space** — toggle recording on/off
 - Menu bar icon shows current state: idle 🎙 / recording 🔴 / processing ⏳
-- Menu bar also lets you pick **Language** and toggle **Use App Context**
+- Menu bar also lets you pick **Language**, toggle **Use App Context**, and run **Prepare Offline Use**
 
 ## Configuration
 
@@ -72,3 +72,19 @@ channels = 1
 enabled = false
 max_chars = 500
 ```
+
+## Offline preparation
+
+Use the menu bar app to pre-download everything Luduan needs:
+
+**Luduan menu bar icon → Prepare Offline Use**
+
+This will:
+- cache the configured Whisper model locally
+- ensure the configured Ollama model is present locally
+
+Progress and result are shown in the menu as an **Offline:** status line, and a
+completion notification appears when it finishes.
+
+After that, Luduan can be used offline as long as those models stay on disk and
+Ollama itself is already installed on your Mac.

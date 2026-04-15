@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
+
 import httpx
 
 from luduan.log import get_logger
@@ -82,6 +85,53 @@ class Postprocessor:
         except Exception:
             return False
 
+    def ensure_model_available(
+        self,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> bool:
+        """Ensure the configured Ollama model is available locally.
+
+        Returns True when a pull was required, False when the model was already
+        present locally.
+        """
+        if not self.enabled:
+            log.info("Skipping Ollama offline preparation because LLM is disabled")
+            return False
+
+        if self.has_model_available():
+            log.info("Ollama model already available: %s", self.model)
+            return False
+
+        if progress_callback:
+            progress_callback(f"Pulling Ollama model {self.model}…")
+        log.info("Pulling Ollama model for offline use: %s", self.model)
+
+        with httpx.Client(timeout=None) as client, client.stream(
+            "POST",
+            f"{self.host}/api/pull",
+            json={"name": self.model, "stream": True},
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                event = json.loads(line)
+                error = event.get("error")
+                if error:
+                    raise RuntimeError(error)
+
+                if progress_callback:
+                    progress_callback(_format_ollama_progress(self.model, event))
+
+        return True
+
+    def has_model_available(self) -> bool:
+        """Return True when the configured Ollama model is already local."""
+        if not self.enabled:
+            return False
+        return self.model in self._list_models()
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -116,6 +166,18 @@ class Postprocessor:
         data = resp.json()
         return data["message"]["content"].strip()
 
+    def _list_models(self) -> set[str]:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(f"{self.host}/api/tags")
+            resp.raise_for_status()
+
+        data = resp.json()
+        return {
+            item["name"]
+            for item in data.get("models", [])
+            if isinstance(item, dict) and "name" in item
+        }
+
 
 def _build_user_prompt(
     text: str,
@@ -136,3 +198,13 @@ def _build_user_prompt(
         "Use the context only to improve names, acronyms, punctuation, and casing. "
         "Return only the cleaned transcript to insert at the cursor."
     )
+
+
+def _format_ollama_progress(model: str, event: dict) -> str:
+    status = event.get("status") or f"Preparing {model}…"
+    completed = event.get("completed")
+    total = event.get("total")
+    if isinstance(completed, int) and isinstance(total, int) and total > 0:
+        percent = int(completed * 100 / total)
+        return f"{status} ({percent}%)"
+    return status

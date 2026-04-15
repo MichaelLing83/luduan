@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 
 import numpy as np
 
+from luduan import config as cfg
 from luduan.log import get_logger
 
 log = get_logger(__name__)
@@ -53,6 +55,7 @@ class Transcriber:
         For long recordings this also fires ``on_partial`` callbacks as
         Whisper processes each internal segment.
         """
+        _ensure_hf_home()
         import mlx_whisper  # lazy import — heavy, load only when needed
 
         audio_f32 = _ensure_float32(audio, sample_rate)
@@ -93,10 +96,49 @@ class Transcriber:
                 parts.append(text)
         return " ".join(parts)
 
+    def ensure_model_cached(self) -> bool:
+        """Ensure the configured Whisper model is downloaded locally.
+
+        Returns True when a download was required, False when the model was
+        already present in the local cache.
+        """
+        _ensure_hf_home()
+        if self.is_model_cached():
+            log.info("Whisper model already cached: %s", self.model_name)
+            return False
+
+        from huggingface_hub import snapshot_download
+
+        log.info("Downloading Whisper model for offline use: %s", self.model_name)
+        snapshot_download(repo_id=self.model_name)
+        return True
+
+    def is_model_cached(self) -> bool:
+        """Return True when the configured Whisper model already exists locally."""
+        _ensure_hf_home()
+
+        from huggingface_hub import snapshot_download
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        try:
+            snapshot_download(
+                repo_id=self.model_name,
+                local_files_only=True,
+            )
+            return True
+        except LocalEntryNotFoundError:
+            return False
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _ensure_hf_home() -> None:
+    hf_home = str(cfg.CONFIG_DIR / "models")
+    os.makedirs(hf_home, exist_ok=True)
+    os.environ.setdefault("HF_HOME", hf_home)
+
 
 def _ensure_float32(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Normalise audio to float32 mono at the expected sample rate."""
