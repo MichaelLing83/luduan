@@ -37,6 +37,7 @@ Om du bygger en fristående `.app` ger du behörigheter till **Luduan** specifik
 ```bash
 make app          # bygger dist/Luduan.app
 make install      # kopierar till /Applications/Luduan.app
+make dmg          # bygger dist/Luduan.dmg
 ```
 
 Efter installation:

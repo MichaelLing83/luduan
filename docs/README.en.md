@@ -38,6 +38,7 @@ Building as a standalone `.app` means you grant permissions to **Luduan** specif
 ```bash
 make app          # builds dist/Luduan.app
 make install      # copies to /Applications/Luduan.app
+make dmg          # builds dist/Luduan.dmg
 ```
 
 After installing:

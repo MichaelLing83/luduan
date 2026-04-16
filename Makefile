@@ -1,10 +1,10 @@
-.PHONY: app install uninstall clean
+.PHONY: app dmg install uninstall clean
 
 DIST_DIR   := dist
 APP_NAME   := Luduan
 APP_BUNDLE := $(DIST_DIR)/$(APP_NAME).app
-CONTENTS   := $(APP_BUNDLE)/Contents
-VENV       := $(CONTENTS)/Resources/venv
+DMG_FILE   := $(DIST_DIR)/$(APP_NAME).dmg
+DMG_STAGE  := $(DIST_DIR)/dmg-staging
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -17,7 +17,23 @@ app:
 
 	@echo "✅ $(APP_BUNDLE)"
 	@echo "   → make install   to copy to /Applications"
+	@echo "   → make dmg       to build $(DMG_FILE)"
 	@echo "   → open $(APP_BUNDLE)   to run now"
+
+dmg: app
+	@echo "→ Building $(DMG_FILE) …"
+	@rm -rf $(DMG_STAGE) $(DMG_FILE)
+	@mkdir -p $(DMG_STAGE)
+	@cp -R $(APP_BUNDLE) $(DMG_STAGE)/
+	@ln -s /Applications $(DMG_STAGE)/Applications
+	@hdiutil create \
+		-volname "$(APP_NAME)" \
+		-srcfolder $(DMG_STAGE) \
+		-ov \
+		-format UDZO \
+		$(DMG_FILE) >/dev/null
+	@rm -rf $(DMG_STAGE)
+	@echo "✅ $(DMG_FILE)"
 
 # ── Install / uninstall ───────────────────────────────────────────────────────
 

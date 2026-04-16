@@ -39,6 +39,7 @@ En construisant une application `.app` autonome, vous accordez les autorisations
 ```bash
 make app          # construit dist/Luduan.app
 make install      # copie vers /Applications/Luduan.app
+make dmg          # construit dist/Luduan.dmg
 ```
 
 Après l’installation :
