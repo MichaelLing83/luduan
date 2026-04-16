@@ -12,7 +12,7 @@ from pathlib import Path
 import AppKit
 import rumps
 
-from luduan import config as cfg
+from luduan import __version__, config as cfg
 from luduan.audio import AudioRecorder
 from luduan.context import AppContextReader
 from luduan.log import LOG_PATH, get_logger
@@ -118,6 +118,8 @@ class LuduanApp(rumps.App):
         self._status_item.set_callback(None)  # non-clickable status line
         self._offline_status_item = rumps.MenuItem(self._offline_status_message, callback=None)
         self._offline_status_item.set_callback(None)
+        self._version_item = rumps.MenuItem(f"Version: {__version__}", callback=None)
+        self._version_item.set_callback(None)
 
         ollama_label = (
             f"LLM: {conf['ollama']['model']} (enabled)"
@@ -150,6 +152,7 @@ class LuduanApp(rumps.App):
             self._offline_item,
             self._offline_status_item,
             None,
+            self._version_item,
             rumps.MenuItem("Show Log", callback=self._on_show_log),
             rumps.MenuItem("Quit Luduan", callback=self._on_quit),
         ]

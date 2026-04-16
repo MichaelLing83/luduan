@@ -1,5 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import re
+from pathlib import Path
+
+
+def read_version() -> str:
+    init_py = Path("src/luduan/__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*"([^"]+)"', init_py)
+    if not match:
+        raise RuntimeError("Could not read Luduan version from src/luduan/__init__.py")
+    return match.group(1)
+
+
+VERSION = read_version()
+
 a = Analysis(
     ['src/luduan/main.py'],
     pathex=['src'],
@@ -50,10 +64,12 @@ app = BUNDLE(
     name='Luduan.app',
     icon='build/AppIcon.icns',
     bundle_identifier='com.luduan.app',
-    version='0.1.0',
+    version=VERSION,
     info_plist={
         'CFBundleName': 'Luduan',
         'CFBundleDisplayName': 'Luduan',
+        'CFBundleShortVersionString': VERSION,
+        'CFBundleVersion': VERSION,
         'LSUIElement': True,
         'NSMicrophoneUsageDescription': 'Luduan records your voice to transcribe speech to text.',
         'NSAppleEventsUsageDescription': 'Luduan uses Apple Events to paste transcribed text into the active app.',
