@@ -15,6 +15,9 @@ log = get_logger(__name__)
 _ACCESSIBILITY_SETTINGS_URL = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 )
+_INPUT_MONITORING_SETTINGS_URL = (
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+)
 
 
 class PasteResult(Enum):
@@ -61,6 +64,11 @@ class TextOutput:
     def open_accessibility_settings() -> None:
         """Open System Settings → Privacy & Security → Accessibility."""
         subprocess.run(["open", _ACCESSIBILITY_SETTINGS_URL], check=False)
+
+    @staticmethod
+    def open_input_monitoring_settings() -> None:
+        """Open System Settings → Privacy & Security → Input Monitoring."""
+        subprocess.run(["open", _INPUT_MONITORING_SETTINGS_URL], check=False)
 
     # ------------------------------------------------------------------
     # Internal

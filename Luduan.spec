@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+
 
 def read_version() -> str:
     init_py = Path("src/luduan/__init__.py").read_text(encoding="utf-8")
@@ -13,13 +15,16 @@ def read_version() -> str:
 
 
 VERSION = read_version()
+HIDDEN_IMPORTS = collect_submodules("mlx") + collect_submodules("mlx_whisper")
+BINARIES = collect_dynamic_libs("mlx")
+DATAS = collect_data_files("mlx") + [('build/menubar_icon.png', '.')]
 
 a = Analysis(
     ['src/luduan/main.py'],
     pathex=['src'],
-    binaries=[],
-    datas=[('build/menubar_icon.png', '.')],
-    hiddenimports=[],
+    binaries=BINARIES,
+    datas=DATAS,
+    hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

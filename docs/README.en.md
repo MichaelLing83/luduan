@@ -55,6 +55,25 @@ make run          # run without building the app
 
 > Note: running from terminal requires granting Input Monitoring to **Terminal** instead of Luduan.
 
+## Rust CLI
+
+This repo also includes a separate Rust command-line tool under `rust-cli/`.
+
+```bash
+make rust-cli-check
+make rust-cli
+make rust-cli-run ARGS="list-dev"
+make rust-cli-run ARGS="record --input default --language en"
+make rust-cli-run ARGS="record -i default -l en -o transcript.txt --append"
+```
+
+- `list-dev` lists available audio input and output devices.
+- `record` captures from `--input`/`-i`, streams transcript text to stdout, and also writes to `--output`/`-o <file>` when provided.
+- `--append`/`-a` keeps existing output file content and appends new transcript lines at the end.
+- Supported language values: `auto`, `english`/`en`, `swedish`/`se`, `chinese`/`cn`, `french`/`fr`, `russian`/`ru`.
+- Short options are also available for common flags: `-i`, `-o`, `-a`, `-l`, `-m`, `-c`.
+- If no local GGML Whisper model is available yet, the CLI tries to download `ggml-base.bin` automatically. You can override that with `--model /path/to/ggml-*.bin`.
+
 ### Hotkey
 - **Cmd+Shift+Space** — toggle recording on/off
 - Menu bar icon shows current state: idle 🎙 / recording 🔴 / processing ⏳

@@ -1,4 +1,4 @@
-.PHONY: app dmg install uninstall clean
+.PHONY: app dmg install uninstall clean rust-cli rust-cli-check rust-cli-run
 
 DIST_DIR   := dist
 APP_NAME   := Luduan
@@ -71,4 +71,16 @@ dev:
 
 clean:
 	@rm -rf $(DIST_DIR) build/Luduan
+	@cargo clean --manifest-path rust-cli/Cargo.toml 2>/dev/null || true
 	@echo "Cleaned."
+
+# ── Rust CLI ────────────────────────────────────────────────────────────────────
+
+rust-cli:
+	@cargo build --manifest-path rust-cli/Cargo.toml --release
+
+rust-cli-check:
+	@cargo check --manifest-path rust-cli/Cargo.toml
+
+rust-cli-run:
+	@cargo run --manifest-path rust-cli/Cargo.toml -- $(ARGS)

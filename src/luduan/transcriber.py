@@ -49,7 +49,13 @@ class Transcriber:
         self.on_partial = on_partial
         self._lock = threading.Lock()
 
-    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+        *,
+        emit_partial: bool = True,
+    ) -> str:
         """Transcribe a complete audio array and return the full text.
 
         For long recordings this also fires ``on_partial`` callbacks as
@@ -74,7 +80,7 @@ class Transcriber:
 
         text: str = result.get("text", "").strip()
 
-        if self.on_partial and text:
+        if emit_partial and self.on_partial and text:
             self.on_partial(text)
 
         return text
