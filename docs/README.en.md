@@ -1,6 +1,6 @@
 # Luduan
 
-![Luduan logo](../assets/luduan-logo.png)
+<img src="../assets/luduan-logo-128.png" alt="Luduan logo" width="120" />
 
 [English](README.en.md) | [简体中文](README.zh-CN.md)
 
