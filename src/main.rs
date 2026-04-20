@@ -134,7 +134,7 @@ const SUPPORTED_LANGUAGES: &[LanguageSpec] = &[
 ];
 
 #[derive(Parser, Debug)]
-#[command(name = "luduan-cli")]
+#[command(name = "luduan")]
 #[command(about = "Local audio device listing and streaming speech-to-text")]
 struct Cli {
     #[command(subcommand)]
@@ -827,7 +827,7 @@ fn build_initial_prompt(
 }
 
 fn default_model_path() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("com", "luduan", "rust-cli")
+    let dirs = ProjectDirs::from("com", "luduan", "luduan")
         .ok_or_else(|| anyhow!("failed to resolve cache directory"))?;
     Ok(dirs.cache_dir().join("models").join(DEFAULT_MODEL_NAME))
 }
