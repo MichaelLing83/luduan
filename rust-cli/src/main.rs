@@ -21,6 +21,117 @@ const SILENCE_RMS_THRESHOLD: f32 = 0.003;
 const DEFAULT_MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
 const DEFAULT_MODEL_NAME: &str = "ggml-base.bin";
+const SUPPORTED_LANGUAGES: &[LanguageSpec] = &[
+    LanguageSpec::auto(),
+    LanguageSpec::new("English", "en", &["english", "en"]),
+    LanguageSpec::new("Chinese", "zh", &["chinese", "zh", "cn", "mandarin"]),
+    LanguageSpec::new("German", "de", &["german", "de"]),
+    LanguageSpec::new("Spanish", "es", &["spanish", "es", "castilian"]),
+    LanguageSpec::new("Russian", "ru", &["russian", "ru"]),
+    LanguageSpec::new("Korean", "ko", &["korean", "ko"]),
+    LanguageSpec::new("French", "fr", &["french", "fr"]),
+    LanguageSpec::new("Japanese", "ja", &["japanese", "ja"]),
+    LanguageSpec::new("Portuguese", "pt", &["portuguese", "pt"]),
+    LanguageSpec::new("Turkish", "tr", &["turkish", "tr"]),
+    LanguageSpec::new("Polish", "pl", &["polish", "pl"]),
+    LanguageSpec::new("Catalan", "ca", &["catalan", "ca", "valencian"]),
+    LanguageSpec::new("Dutch", "nl", &["dutch", "nl", "flemish"]),
+    LanguageSpec::new("Arabic", "ar", &["arabic", "ar"]),
+    LanguageSpec::new("Swedish", "sv", &["swedish", "sv", "se"]),
+    LanguageSpec::new("Italian", "it", &["italian", "it"]),
+    LanguageSpec::new("Indonesian", "id", &["indonesian", "id"]),
+    LanguageSpec::new("Hindi", "hi", &["hindi", "hi"]),
+    LanguageSpec::new("Finnish", "fi", &["finnish", "fi"]),
+    LanguageSpec::new("Vietnamese", "vi", &["vietnamese", "vi"]),
+    LanguageSpec::new("Hebrew", "he", &["hebrew", "he"]),
+    LanguageSpec::new("Ukrainian", "uk", &["ukrainian", "uk"]),
+    LanguageSpec::new("Greek", "el", &["greek", "el"]),
+    LanguageSpec::new("Malay", "ms", &["malay", "ms"]),
+    LanguageSpec::new("Czech", "cs", &["czech", "cs"]),
+    LanguageSpec::new(
+        "Romanian",
+        "ro",
+        &["romanian", "ro", "moldavian", "moldovan"],
+    ),
+    LanguageSpec::new("Danish", "da", &["danish", "da"]),
+    LanguageSpec::new("Hungarian", "hu", &["hungarian", "hu"]),
+    LanguageSpec::new("Tamil", "ta", &["tamil", "ta"]),
+    LanguageSpec::new("Norwegian", "no", &["norwegian", "no"]),
+    LanguageSpec::new("Thai", "th", &["thai", "th"]),
+    LanguageSpec::new("Urdu", "ur", &["urdu", "ur"]),
+    LanguageSpec::new("Croatian", "hr", &["croatian", "hr"]),
+    LanguageSpec::new("Bulgarian", "bg", &["bulgarian", "bg"]),
+    LanguageSpec::new("Lithuanian", "lt", &["lithuanian", "lt"]),
+    LanguageSpec::new("Latin", "la", &["latin", "la"]),
+    LanguageSpec::new("Maori", "mi", &["maori", "mi"]),
+    LanguageSpec::new("Malayalam", "ml", &["malayalam", "ml"]),
+    LanguageSpec::new("Welsh", "cy", &["welsh", "cy"]),
+    LanguageSpec::new("Slovak", "sk", &["slovak", "sk"]),
+    LanguageSpec::new("Telugu", "te", &["telugu", "te"]),
+    LanguageSpec::new("Persian", "fa", &["persian", "fa"]),
+    LanguageSpec::new("Latvian", "lv", &["latvian", "lv"]),
+    LanguageSpec::new("Bengali", "bn", &["bengali", "bn"]),
+    LanguageSpec::new("Serbian", "sr", &["serbian", "sr"]),
+    LanguageSpec::new("Azerbaijani", "az", &["azerbaijani", "az"]),
+    LanguageSpec::new("Slovenian", "sl", &["slovenian", "sl"]),
+    LanguageSpec::new("Kannada", "kn", &["kannada", "kn"]),
+    LanguageSpec::new("Estonian", "et", &["estonian", "et"]),
+    LanguageSpec::new("Macedonian", "mk", &["macedonian", "mk"]),
+    LanguageSpec::new("Breton", "br", &["breton", "br"]),
+    LanguageSpec::new("Basque", "eu", &["basque", "eu"]),
+    LanguageSpec::new("Icelandic", "is", &["icelandic", "is"]),
+    LanguageSpec::new("Armenian", "hy", &["armenian", "hy"]),
+    LanguageSpec::new("Nepali", "ne", &["nepali", "ne"]),
+    LanguageSpec::new("Mongolian", "mn", &["mongolian", "mn"]),
+    LanguageSpec::new("Bosnian", "bs", &["bosnian", "bs"]),
+    LanguageSpec::new("Kazakh", "kk", &["kazakh", "kk"]),
+    LanguageSpec::new("Albanian", "sq", &["albanian", "sq"]),
+    LanguageSpec::new("Swahili", "sw", &["swahili", "sw"]),
+    LanguageSpec::new("Galician", "gl", &["galician", "gl"]),
+    LanguageSpec::new("Marathi", "mr", &["marathi", "mr"]),
+    LanguageSpec::new("Punjabi", "pa", &["punjabi", "pa", "panjabi"]),
+    LanguageSpec::new("Sinhala", "si", &["sinhala", "si", "sinhalese"]),
+    LanguageSpec::new("Khmer", "km", &["khmer", "km"]),
+    LanguageSpec::new("Shona", "sn", &["shona", "sn"]),
+    LanguageSpec::new("Yoruba", "yo", &["yoruba", "yo"]),
+    LanguageSpec::new("Somali", "so", &["somali", "so"]),
+    LanguageSpec::new("Afrikaans", "af", &["afrikaans", "af"]),
+    LanguageSpec::new("Occitan", "oc", &["occitan", "oc"]),
+    LanguageSpec::new("Georgian", "ka", &["georgian", "ka"]),
+    LanguageSpec::new("Belarusian", "be", &["belarusian", "be"]),
+    LanguageSpec::new("Tajik", "tg", &["tajik", "tg"]),
+    LanguageSpec::new("Sindhi", "sd", &["sindhi", "sd"]),
+    LanguageSpec::new("Gujarati", "gu", &["gujarati", "gu"]),
+    LanguageSpec::new("Amharic", "am", &["amharic", "am"]),
+    LanguageSpec::new("Yiddish", "yi", &["yiddish", "yi"]),
+    LanguageSpec::new("Lao", "lo", &["lao", "lo"]),
+    LanguageSpec::new("Uzbek", "uz", &["uzbek", "uz"]),
+    LanguageSpec::new("Faroese", "fo", &["faroese", "fo"]),
+    LanguageSpec::new("Haitian Creole", "ht", &["haitian creole", "ht", "haitian"]),
+    LanguageSpec::new("Pashto", "ps", &["pashto", "ps", "pushto"]),
+    LanguageSpec::new("Turkmen", "tk", &["turkmen", "tk"]),
+    LanguageSpec::new("Nynorsk", "nn", &["nynorsk", "nn", "norwegian nynorsk"]),
+    LanguageSpec::new("Maltese", "mt", &["maltese", "mt"]),
+    LanguageSpec::new("Sanskrit", "sa", &["sanskrit", "sa"]),
+    LanguageSpec::new(
+        "Luxembourgish",
+        "lb",
+        &["luxembourgish", "lb", "letzeburgesch"],
+    ),
+    LanguageSpec::new("Myanmar", "my", &["myanmar", "my", "burmese"]),
+    LanguageSpec::new("Tibetan", "bo", &["tibetan", "bo"]),
+    LanguageSpec::new("Tagalog", "tl", &["tagalog", "tl"]),
+    LanguageSpec::new("Malagasy", "mg", &["malagasy", "mg"]),
+    LanguageSpec::new("Assamese", "as", &["assamese", "as"]),
+    LanguageSpec::new("Tatar", "tt", &["tatar", "tt"]),
+    LanguageSpec::new("Hawaiian", "haw", &["hawaiian", "haw"]),
+    LanguageSpec::new("Lingala", "ln", &["lingala", "ln"]),
+    LanguageSpec::new("Hausa", "ha", &["hausa", "ha"]),
+    LanguageSpec::new("Bashkir", "ba", &["bashkir", "ba"]),
+    LanguageSpec::new("Javanese", "jw", &["javanese", "jw"]),
+    LanguageSpec::new("Sundanese", "su", &["sundanese", "su"]),
+    LanguageSpec::new("Cantonese", "yue", &["cantonese", "yue"]),
+];
 
 #[derive(Parser, Debug)]
 #[command(name = "luduan-cli")]
@@ -34,6 +145,8 @@ struct Cli {
 enum Commands {
     /// List available audio input and output devices
     ListDev,
+    /// List supported transcription languages and short codes
+    ListLang,
     /// Record from an input device and stream transcripts to stdout
     Record(RecordArgs),
 }
@@ -41,7 +154,7 @@ enum Commands {
 #[derive(Args, Debug)]
 struct RecordArgs {
     /// Input device index from `list-dev`, `default`, or part/all of the device name
-    #[arg(short = 'i', long)]
+    #[arg(short = 'i', long, default_value = "default")]
     input: String,
 
     /// Optional output text file for transcribed chunks
@@ -52,9 +165,17 @@ struct RecordArgs {
     #[arg(short = 'a', long)]
     append: bool,
 
-    /// Language: auto, english/en, swedish/se, chinese/cn, french/fr, russian/ru
+    /// Language: auto, or any supported Whisper language name/code (see `list-lang`)
     #[arg(short = 'l', long, default_value = "auto")]
     language: String,
+
+    /// Inline prompt text to guide Whisper with domain terms or names
+    #[arg(short = 'p', long)]
+    prompt: Option<String>,
+
+    /// Read additional prompt context from a text file
+    #[arg(short = 'f', long)]
+    context_file: Option<PathBuf>,
 
     /// Path to a whisper.cpp GGML model file
     #[arg(short = 'm', long)]
@@ -80,10 +201,35 @@ struct CaptureBuffer {
     chunk_frames: usize,
 }
 
+struct LanguageSpec {
+    name: &'static str,
+    code: Option<&'static str>,
+    aliases: &'static [&'static str],
+}
+
+impl LanguageSpec {
+    const fn auto() -> Self {
+        Self {
+            name: "Auto Detect",
+            code: None,
+            aliases: &["auto"],
+        }
+    }
+
+    const fn new(name: &'static str, code: &'static str, aliases: &'static [&'static str]) -> Self {
+        Self {
+            name,
+            code: Some(code),
+            aliases,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::ListDev => list_devices(),
+        Commands::ListLang => list_languages(),
         Commands::Record(args) => record(args),
     }
 }
@@ -156,12 +302,23 @@ fn list_devices() -> Result<()> {
     Ok(())
 }
 
+fn list_languages() -> Result<()> {
+    println!("Supported languages:");
+    for language in SUPPORTED_LANGUAGES {
+        let code = language.code.unwrap_or("auto");
+        println!("  {} ({})", language.name, code);
+    }
+    Ok(())
+}
+
 fn record(args: RecordArgs) -> Result<()> {
     if args.append && args.output.is_none() {
         bail!("--append requires --output <FILE>");
     }
 
     let language = resolve_language(&args.language)?;
+    let initial_prompt =
+        build_initial_prompt(args.prompt.as_deref(), args.context_file.as_deref())?;
     let chunk_seconds = args.chunk_seconds.max(1.0);
     let host = cpal::default_host();
     let input_devices = collect_input_devices(&host)?;
@@ -214,10 +371,12 @@ fn record(args: RecordArgs) -> Result<()> {
 
     let worker_model_path = model_path.clone();
     let worker_language = language.clone();
+    let worker_initial_prompt = initial_prompt.clone();
     let worker = thread::spawn(move || {
         transcription_worker(
             worker_model_path,
             worker_language,
+            worker_initial_prompt,
             sample_rate,
             chunk_rx,
             text_tx,
@@ -443,6 +602,7 @@ where
 fn transcription_worker(
     model_path: PathBuf,
     language: Option<String>,
+    initial_prompt: Option<String>,
     input_sample_rate: u32,
     chunk_rx: Receiver<Vec<f32>>,
     text_tx: mpsc::Sender<String>,
@@ -469,7 +629,12 @@ fn transcription_worker(
                     continue;
                 }
 
-                let text = transcribe_chunk(&mut state, language.as_deref(), &resampled)?;
+                let text = transcribe_chunk(
+                    &mut state,
+                    language.as_deref(),
+                    initial_prompt.as_deref(),
+                    &resampled,
+                )?;
                 if !text.is_empty() {
                     text_tx.send(text).ok();
                 }
@@ -486,6 +651,7 @@ fn transcription_worker(
 fn transcribe_chunk(
     state: &mut whisper_rs::WhisperState,
     language: Option<&str>,
+    initial_prompt: Option<&str>,
     samples: &[f32],
 ) -> Result<String> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -497,6 +663,9 @@ fn transcribe_chunk(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    if let Some(prompt) = initial_prompt {
+        params.set_initial_prompt(prompt);
+    }
 
     match language {
         Some(lang) => {
@@ -616,16 +785,45 @@ fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f3
 
 fn resolve_language(input: &str) -> Result<Option<String>> {
     let normalized = input.trim().to_ascii_lowercase();
-    let value = match normalized.as_str() {
-        "auto" => None,
-        "english" | "en" => Some("en"),
-        "swedish" | "se" | "sv" => Some("sv"),
-        "chinese" | "cn" | "zh" => Some("zh"),
-        "french" | "fr" => Some("fr"),
-        "russian" | "ru" => Some("ru"),
-        _ => bail!("unsupported language '{input}'"),
-    };
-    Ok(value.map(str::to_string))
+
+    for language in SUPPORTED_LANGUAGES {
+        if language.aliases.iter().any(|alias| *alias == normalized) {
+            return Ok(language.code.map(str::to_string));
+        }
+    }
+
+    bail!("unsupported language '{input}'; run `luduan list-lang`")
+}
+
+fn build_initial_prompt(
+    prompt: Option<&str>,
+    context_file: Option<&Path>,
+) -> Result<Option<String>> {
+    let mut parts = Vec::new();
+
+    if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(prompt.to_string());
+    }
+
+    if let Some(path) = context_file {
+        let file_text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read context file {}", path.display()))?;
+        let trimmed = file_text.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
+    }
+
+    if parts.is_empty() {
+        return Ok(None);
+    }
+
+    let combined = parts.join("\n\n");
+    if combined.contains('\0') {
+        bail!("prompt text cannot contain NUL bytes");
+    }
+
+    Ok(Some(combined))
 }
 
 fn default_model_path() -> Result<PathBuf> {

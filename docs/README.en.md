@@ -63,15 +63,19 @@ This repo also includes a separate Rust command-line tool under `rust-cli/`.
 make rust-cli-check
 make rust-cli
 make rust-cli-run ARGS="list-dev"
+make rust-cli-run ARGS="list-lang"
 make rust-cli-run ARGS="record --input default --language en"
 make rust-cli-run ARGS="record -i default -l en -o transcript.txt --append"
+make rust-cli-run ARGS="record -p 'OpenAI, Luduan, mlx-whisper' -f ./terms.txt"
 ```
 
 - `list-dev` lists available audio input and output devices.
-- `record` captures from `--input`/`-i`, streams transcript text to stdout, and also writes to `--output`/`-o <file>` when provided.
+- `list-lang` lists the supported transcription languages and their short codes.
+- `record` captures from `--input`/`-i` and defaults to the system default input device when omitted; it streams transcript text to stdout and also writes to `--output`/`-o <file>` when provided.
 - `--append`/`-a` keeps existing output file content and appends new transcript lines at the end.
-- Supported language values: `auto`, `english`/`en`, `swedish`/`se`, `chinese`/`cn`, `french`/`fr`, `russian`/`ru`.
-- Short options are also available for common flags: `-i`, `-o`, `-a`, `-l`, `-m`, `-c`.
+- `--language`/`-l` accepts the full Whisper language set by code or name/alias, and defaults to `auto`; use `list-lang` to see the complete list.
+- `--prompt`/`-p` provides inline Whisper context, and `--context-file`/`-f` loads additional context from a text file.
+- Short options are also available for common flags: `-i`, `-o`, `-a`, `-l`, `-p`, `-f`, `-m`, `-c`.
 - If no local GGML Whisper model is available yet, the CLI tries to download `ggml-base.bin` automatically. You can override that with `--model /path/to/ggml-*.bin`.
 
 ### Hotkey
