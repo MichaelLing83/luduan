@@ -26,3 +26,11 @@ After installation:
 ```bash
 ~/.cargo/bin/luduan --help
 ```
+
+Model management:
+
+```bash
+luduan model list
+luduan model download base
+luduan model local
+```

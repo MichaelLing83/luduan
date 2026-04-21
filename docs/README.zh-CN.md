@@ -32,6 +32,14 @@ make release
 ~/.cargo/bin/luduan
 ```
 
+## 模型管理
+
+```bash
+luduan model list
+luduan model download base
+luduan model local
+```
+
 ## 用法
 
 列出音频设备：

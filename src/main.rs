@@ -18,9 +18,48 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const DEFAULT_CHUNK_SECONDS: f32 = 5.0;
 const MIN_FLUSH_SECONDS: f32 = 0.5;
 const SILENCE_RMS_THRESHOLD: f32 = 0.003;
-const DEFAULT_MODEL_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
 const DEFAULT_MODEL_NAME: &str = "ggml-base.bin";
+const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const AVAILABLE_MODELS: &[ModelSpec] = &[
+    ModelSpec::new("tiny", "ggml-tiny.bin", "75 MiB"),
+    ModelSpec::new("tiny.en", "ggml-tiny.en.bin", "75 MiB"),
+    ModelSpec::new("tiny-q5_1", "ggml-tiny-q5_1.bin", "31 MiB"),
+    ModelSpec::new("tiny.en-q5_1", "ggml-tiny.en-q5_1.bin", "31 MiB"),
+    ModelSpec::new("tiny-q8_0", "ggml-tiny-q8_0.bin", "42 MiB"),
+    ModelSpec::new("base", "ggml-base.bin", "142 MiB"),
+    ModelSpec::new("base.en", "ggml-base.en.bin", "142 MiB"),
+    ModelSpec::new("base-q5_1", "ggml-base-q5_1.bin", "57 MiB"),
+    ModelSpec::new("base.en-q5_1", "ggml-base.en-q5_1.bin", "57 MiB"),
+    ModelSpec::new("base-q8_0", "ggml-base-q8_0.bin", "78 MiB"),
+    ModelSpec::new("small", "ggml-small.bin", "466 MiB"),
+    ModelSpec::new("small.en", "ggml-small.en.bin", "466 MiB"),
+    ModelSpec::new("small.en-tdrz", "ggml-small.en-tdrz.bin", "465 MiB"),
+    ModelSpec::new("small-q5_1", "ggml-small-q5_1.bin", "182 MiB"),
+    ModelSpec::new("small.en-q5_1", "ggml-small.en-q5_1.bin", "182 MiB"),
+    ModelSpec::new("small-q8_0", "ggml-small-q8_0.bin", "252 MiB"),
+    ModelSpec::new("medium", "ggml-medium.bin", "1.5 GiB"),
+    ModelSpec::new("medium.en", "ggml-medium.en.bin", "1.5 GiB"),
+    ModelSpec::new("medium-q5_0", "ggml-medium-q5_0.bin", "514 MiB"),
+    ModelSpec::new("medium.en-q5_0", "ggml-medium.en-q5_0.bin", "514 MiB"),
+    ModelSpec::new("medium-q8_0", "ggml-medium-q8_0.bin", "785 MiB"),
+    ModelSpec::new("large-v1", "ggml-large-v1.bin", "2.9 GiB"),
+    ModelSpec::new("large-v2", "ggml-large-v2.bin", "2.9 GiB"),
+    ModelSpec::new("large-v2-q5_0", "ggml-large-v2-q5_0.bin", "1.1 GiB"),
+    ModelSpec::new("large-v2-q8_0", "ggml-large-v2-q8_0.bin", "1.5 GiB"),
+    ModelSpec::new("large-v3", "ggml-large-v3.bin", "2.9 GiB"),
+    ModelSpec::new("large-v3-q5_0", "ggml-large-v3-q5_0.bin", "1.1 GiB"),
+    ModelSpec::new("large-v3-turbo", "ggml-large-v3-turbo.bin", "1.5 GiB"),
+    ModelSpec::new(
+        "large-v3-turbo-q5_0",
+        "ggml-large-v3-turbo-q5_0.bin",
+        "547 MiB",
+    ),
+    ModelSpec::new(
+        "large-v3-turbo-q8_0",
+        "ggml-large-v3-turbo-q8_0.bin",
+        "834 MiB",
+    ),
+];
 const SUPPORTED_LANGUAGES: &[LanguageSpec] = &[
     LanguageSpec::auto(),
     LanguageSpec::new("English", "en", &["english", "en"]),
@@ -147,8 +186,29 @@ enum Commands {
     ListDev,
     /// List supported transcription languages and short codes
     ListLang,
+    /// Manage downloadable Whisper models
+    Model {
+        #[command(subcommand)]
+        command: ModelCommand,
+    },
     /// Record from an input device and stream transcripts to stdout
     Record(RecordArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelCommand {
+    /// List models that can be downloaded
+    List,
+    /// Download a model into Luduan's local cache
+    Download(DownloadModelArgs),
+    /// List models already downloaded into Luduan's local cache
+    Local,
+}
+
+#[derive(Args, Debug)]
+struct DownloadModelArgs {
+    /// Model name from `luduan model list`, e.g. `base`, `large-v3`, `base.en`
+    model: String,
 }
 
 #[derive(Args, Debug)]
@@ -207,6 +267,12 @@ struct LanguageSpec {
     aliases: &'static [&'static str],
 }
 
+struct ModelSpec {
+    name: &'static str,
+    file_name: &'static str,
+    size: &'static str,
+}
+
 impl LanguageSpec {
     const fn auto() -> Self {
         Self {
@@ -225,11 +291,26 @@ impl LanguageSpec {
     }
 }
 
+impl ModelSpec {
+    const fn new(name: &'static str, file_name: &'static str, size: &'static str) -> Self {
+        Self {
+            name,
+            file_name,
+            size,
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("{MODEL_BASE_URL}/{}", self.file_name)
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::ListDev => list_devices(),
         Commands::ListLang => list_languages(),
+        Commands::Model { command } => model_command(command),
         Commands::Record(args) => record(args),
     }
 }
@@ -308,6 +389,85 @@ fn list_languages() -> Result<()> {
         let code = language.code.unwrap_or("auto");
         println!("  {} ({})", language.name, code);
     }
+    Ok(())
+}
+
+fn model_command(command: ModelCommand) -> Result<()> {
+    match command {
+        ModelCommand::List => list_models(),
+        ModelCommand::Download(args) => download_model(&args.model),
+        ModelCommand::Local => list_local_models(),
+    }
+}
+
+fn list_models() -> Result<()> {
+    println!("Downloadable models:");
+    for spec in AVAILABLE_MODELS {
+        let default = if spec.file_name == DEFAULT_MODEL_NAME {
+            " default"
+        } else {
+            ""
+        };
+        println!(
+            "  {:<18} {} ({}){}",
+            spec.name, spec.file_name, spec.size, default
+        );
+    }
+    Ok(())
+}
+
+fn download_model(name: &str) -> Result<()> {
+    let spec = resolve_model_spec(name)?;
+    let path = model_cache_dir()?.join(spec.file_name);
+    ensure_model_file_from_spec(spec, &path)?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+fn list_local_models() -> Result<()> {
+    let dir = model_cache_dir()?;
+    if !dir.exists() {
+        println!("Downloaded models:");
+        println!("  (none)");
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(&dir)
+        .with_context(|| format!("failed to read model directory {}", dir.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            if !name.starts_with("ggml-") || !name.ends_with(".bin") {
+                return None;
+            }
+            Some(path)
+        })
+        .collect::<Vec<_>>();
+
+    entries.sort();
+
+    println!("Downloaded models:");
+    if entries.is_empty() {
+        println!("  (none)");
+        return Ok(());
+    }
+
+    for path in entries {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let display_name = AVAILABLE_MODELS
+            .iter()
+            .find(|spec| spec.file_name == file_name)
+            .map(|spec| spec.name)
+            .unwrap_or(file_name);
+        let size = fs::metadata(&path)
+            .map(|metadata| format_bytes(metadata.len()))
+            .unwrap_or_else(|_| "?".to_string());
+        println!("  {:<18} {} ({})", display_name, file_name, size);
+    }
+
     Ok(())
 }
 
@@ -827,12 +987,35 @@ fn build_initial_prompt(
 }
 
 fn default_model_path() -> Result<PathBuf> {
+    Ok(model_cache_dir()?.join(DEFAULT_MODEL_NAME))
+}
+
+fn model_cache_dir() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("com", "luduan", "luduan")
         .ok_or_else(|| anyhow!("failed to resolve cache directory"))?;
-    Ok(dirs.cache_dir().join("models").join(DEFAULT_MODEL_NAME))
+    Ok(dirs.cache_dir().join("models"))
+}
+
+fn resolve_model_spec(input: &str) -> Result<&'static ModelSpec> {
+    let normalized = input.trim().to_ascii_lowercase();
+    AVAILABLE_MODELS
+        .iter()
+        .find(|spec| {
+            spec.name.eq_ignore_ascii_case(&normalized)
+                || spec.file_name.eq_ignore_ascii_case(&normalized)
+        })
+        .with_context(|| format!("unknown model '{input}'; run `luduan model list`"))
 }
 
 fn ensure_model_file(path: &Path) -> Result<()> {
+    let spec = AVAILABLE_MODELS
+        .iter()
+        .find(|spec| spec.file_name == DEFAULT_MODEL_NAME)
+        .ok_or_else(|| anyhow!("default model metadata is missing"))?;
+    ensure_model_file_from_spec(spec, path)
+}
+
+fn ensure_model_file_from_spec(spec: &ModelSpec, path: &Path) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
@@ -845,9 +1028,10 @@ fn ensure_model_file(path: &Path) -> Result<()> {
 
     let temp_path = path.with_extension("download");
     eprintln!(
-        "Model not found at {}. Downloading {} ...",
+        "Model '{}' not found at {}. Downloading {} ...",
+        spec.name,
         path.display(),
-        DEFAULT_MODEL_URL
+        spec.url()
     );
 
     let client = Client::builder()
@@ -855,12 +1039,14 @@ fn ensure_model_file(path: &Path) -> Result<()> {
         .build()
         .context("failed to create HTTP client")?;
     let mut response = client
-        .get(DEFAULT_MODEL_URL)
+        .get(spec.url())
         .send()
         .with_context(|| {
             format!(
-                "failed to download default model from {DEFAULT_MODEL_URL}; \
-pass --model /path/to/ggml-*.bin to use a local whisper.cpp model"
+                "failed to download model '{}' from {}; \
+pass --model /path/to/ggml-*.bin to use a local whisper.cpp model",
+                spec.name,
+                spec.url()
             )
         })?
         .error_for_status()
@@ -880,6 +1066,20 @@ pass --model /path/to/ggml-*.bin to use a local whisper.cpp model"
     download_result?;
 
     Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    let value = bytes as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn decoder_threads() -> i32 {

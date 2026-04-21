@@ -33,6 +33,14 @@ That builds the release binary and installs it to:
 ~/.cargo/bin/luduan
 ```
 
+## Model management
+
+```bash
+luduan model list
+luduan model download base
+luduan model local
+```
+
 ## Usage
 
 List audio devices:
