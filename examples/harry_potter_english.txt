@@ -1,0 +1,103 @@
+# Main characters
+Harry Potter
+Ron Weasley
+Hermione Granger
+Albus Dumbledore
+Severus Snape
+Rubeus Hagrid
+Lord Voldemort
+Tom Riddle
+Sirius Black
+Remus Lupin
+Draco Malfoy
+Lucius Malfoy
+Narcissa Malfoy
+Bellatrix Lestrange
+Ginny Weasley
+Fred Weasley
+George Weasley
+Percy Weasley
+Molly Weasley
+Arthur Weasley
+Neville Longbottom
+Luna Lovegood
+
+# Hogwarts teachers
+Minerva McGonagall
+Filius Flitwick
+Pomona Sprout
+Sybill Trelawney
+Dolores Umbridge
+Gilderoy Lockhart
+Mad-Eye Moody
+Horace Slughorn
+Quirinus Quirrell
+
+# muggel families
+Vernon Dursley
+Petunia Dursley
+Dudley Dursley
+
+# Hogwart's houses
+Gryffindor
+Slytherin
+Hufflepuff
+Ravenclaw
+
+# Places
+Hogwarts
+Hogwarts Express
+Platform 9¾
+Diagon Alley
+Knockturn Alley
+Hogsmeade
+Azkaban
+Gringotts
+Ollivanders
+The Burrow
+Godric's Hollow
+Little Whinging
+Durmstrang
+Beauxbatons
+
+# Magical stuff
+wand
+broomstick
+cauldron
+potion
+spell
+curse
+charm
+wizard
+witch
+Muggle
+Squib
+Muggle-born
+pure-blood
+half-blood
+Patronus
+Dementor
+House-elf
+Goblin
+Unicorn
+Dragon
+Phoenix
+Quidditch
+Golden Snitch
+Sorting Hat
+Mirror of Erised
+Time-Turner
+Marauder's Map
+Deathly Hallows
+Philosopher's Stone
+Chamber of Secrets
+
+# positions and organisations
+Ministry of Magic
+Order of the Phoenix
+Dumbledore's Army
+Death Eaters
+Headmaster
+Head of House
+Prefect
+Auror

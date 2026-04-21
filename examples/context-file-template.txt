@@ -1,0 +1,24 @@
+# Luduan context-file template
+# Remove or replace these lines with your own glossary items.
+# One term or short phrase per line is usually the most effective format.
+# Group labels are optional; you can delete them if you prefer a plain list.
+
+# People
+<person name 1>
+<person name 2>
+
+# Places
+<place name 1>
+<place name 2>
+
+# Organizations
+<organization name 1>
+<organization name 2>
+
+# Terms
+<special term 1>
+<special term 2>
+
+# Alternate spellings / abbreviations
+<alias 1>
+<alias 2>

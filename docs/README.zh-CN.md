@@ -40,6 +40,20 @@ luduan model download base
 luduan model local
 ```
 
+## Context-file 模板
+
+仓库里已经附带了一个可填写的模板：
+
+```bash
+examples/context-file-template.txt
+```
+
+可以这样使用：
+
+```bash
+luduan record -f ./examples/context-file-template.txt
+```
+
 ## 用法
 
 列出音频设备：

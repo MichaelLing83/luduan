@@ -41,6 +41,20 @@ luduan model download base
 luduan model local
 ```
 
+## Context-file template
+
+A reusable template is included at:
+
+```bash
+examples/context-file-template.txt
+```
+
+Use it like this:
+
+```bash
+luduan record -f ./examples/context-file-template.txt
+```
+
 ## Usage
 
 List audio devices:

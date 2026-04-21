@@ -1,0 +1,103 @@
+# Huvudkaraktärer
+Harry Potter
+Ron Weasley
+Hermione Granger
+Albus Dumbledore
+Severus Snape
+Rubeus Hagrid
+Lord Voldemort
+Tom Riddle
+Sirius Black
+Remus Lupin
+Draco Malfoy
+Lucius Malfoy
+Narcissa Malfoy
+Bellatrix Lestrange
+Ginny Weasley
+Fred Weasley
+George Weasley
+Percy Weasley
+Molly Weasley
+Arthur Weasley
+Neville Longbottom
+Luna Lovegood
+
+# Lärare på Hogwarts
+Minerva McGonagall
+Filius Flitwick
+Pomona Sprout
+Sybill Trelawney
+Dolores Umbridge
+Gyllenroy Lockman
+Ögonvind-Moody
+Horace Slughorn
+Quirinus Quirrell
+
+# Muggelfamilj
+Vernon Dursley
+Petunia Dursley
+Dudley Dursley
+
+# Hus på Hogwarts
+Gryffindor
+Slytherin
+Hufflepuff
+Ravenclaw
+
+# Platser
+Hogwarts
+Hogwartsexpressen
+Plattform 9¾
+Diagon Alley
+Knockturn Alley
+Hogsmeade
+Azkaban
+Gringotts
+Ollivanders
+Grynet
+Godrics Kulle
+Små Whinging
+Durmstrang
+Beauxbatons
+
+# Magiska ord och saker
+trollstav / trollspö
+kvastkäpp
+kittel
+dryck
+förtrollning
+förbannelse
+besvärjelse
+trollkarl
+häxa
+muggla
+squib
+muggelfödd
+renblod
+halvblod
+Patronus
+Dementor
+husälf
+svartalf
+enhörning
+drake
+fenix
+Kvidditch
+Gyllene Snitch
+Sorteringshatten
+Erised-spegeln
+Tidsvredaren
+Fyrhuskarnas karta
+Dödstalismanerna
+de vises sten
+Hemligheternas kammare
+
+# viktiga positioner eller organisationer
+Trolldomsministeriet
+Fenixorden
+Dumbledores armé
+Dödätarna
+rektor
+husrektor
+Präfekt
+Sökare
