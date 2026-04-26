@@ -86,6 +86,16 @@ luduan record \
   -f ./terms.txt
 ```
 
+Correct transcripts with a local Ollama model before output:
+
+```bash
+luduan record \
+  --ollama-model qwen2.5:7b \
+  --ollama-context-file ./correction-context.txt \
+  --ollama-context-file-last-lines 80 \
+  --ollama-prompt "Only fix names, places, proper nouns, and clear spelling errors. Do not add content."
+```
+
 ## Record command features
 
 - Defaults to the system default input device
@@ -94,6 +104,9 @@ luduan record \
 - Streams transcript chunks to stdout
 - Optionally writes or appends transcripts to a text file
 - Supports inline prompt text and prompt context files
+- Can optionally call a local Ollama model to correct each transcript chunk with extra context before output
+- Can read only the last N non-empty lines from a large Ollama context file
+- Can override the default correction instruction with `--ollama-prompt`
 
 ## Model behavior
 

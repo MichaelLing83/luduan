@@ -85,6 +85,16 @@ luduan record \
   -f ./terms.txt
 ```
 
+使用本地 Ollama 模型在输出前修正转写结果：
+
+```bash
+luduan record \
+  --ollama-model qwen2.5:7b \
+  --ollama-context-file ./correction-context.txt \
+  --ollama-context-file-last-lines 80 \
+  --ollama-prompt "只纠正人名、地名、专有名词和明确拼写错误，不要添加任何内容。"
+```
+
 ## `record` 特性
 
 - 默认使用系统默认音频输入设备
@@ -93,6 +103,9 @@ luduan record \
 - 会把转写结果流式输出到 stdout
 - 可选写入或追加到文本文件
 - 支持直接传入 prompt 文本或从上下文文件加载 prompt
+- 可选调用本地 Ollama 模型，根据额外上下文修正每段转写后再输出
+- Ollama 上下文文件较大时，可只读取最后 N 个非空行
+- 可通过 `--ollama-prompt` 覆盖默认修正指令
 
 ## 模型行为
 

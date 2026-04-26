@@ -4,8 +4,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SizedSample, Stream, StreamConfig, SupportedStreamConfig};
 use directories::ProjectDirs;
 use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -20,6 +22,12 @@ const MIN_FLUSH_SECONDS: f32 = 0.5;
 const SILENCE_RMS_THRESHOLD: f32 = 0.003;
 const DEFAULT_MODEL_NAME: &str = "ggml-base.bin";
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
+const DEFAULT_OLLAMA_CORRECTION_PROMPT: &str = "Correct the following speech-to-text transcript using the provided context. \
+Do not add, remove, complete, summarize, or rewrite any content. \
+Only correct clear recognition or spelling errors, especially people names, place names, and proper nouns. \
+Preserve the original wording, meaning, language, and punctuation unless a spelling correction requires a minimal change. \
+Output only the corrected transcript, with no explanation.";
 const AVAILABLE_MODELS: &[ModelSpec] = &[
     ModelSpec::new("tiny", "ggml-tiny.bin", "75 MiB"),
     ModelSpec::new("tiny.en", "ggml-tiny.en.bin", "75 MiB"),
@@ -237,6 +245,32 @@ struct RecordArgs {
     #[arg(short = 'f', long)]
     context_file: Option<PathBuf>,
 
+    /// Ollama model used to correct each transcribed chunk before output
+    #[arg(long)]
+    ollama_model: Option<String>,
+
+    /// Ollama server base URL
+    #[arg(long, default_value = DEFAULT_OLLAMA_URL)]
+    ollama_url: String,
+
+    /// Inline context text to guide Ollama transcript correction
+    #[arg(long)]
+    ollama_context: Option<String>,
+
+    /// Read additional Ollama correction context from a text file
+    #[arg(long)]
+    ollama_context_file: Option<PathBuf>,
+
+    /// Only read the last N non-empty lines from --ollama-context-file
+    #[arg(long)]
+    ollama_context_file_last_lines: Option<usize>,
+
+    /// Prompt that instructs Ollama how to correct transcript chunks.
+    ///
+    /// Defaults to: "Correct the following speech-to-text transcript using the provided context. Do not add, remove, complete, summarize, or rewrite any content. Only correct clear recognition or spelling errors, especially people names, place names, and proper nouns. Preserve the original wording, meaning, language, and punctuation unless a spelling correction requires a minimal change. Output only the corrected transcript, with no explanation."
+    #[arg(long)]
+    ollama_prompt: Option<String>,
+
     /// Path to a whisper.cpp GGML model file
     #[arg(short = 'm', long)]
     model: Option<PathBuf>,
@@ -271,6 +305,26 @@ struct ModelSpec {
     name: &'static str,
     file_name: &'static str,
     size: &'static str,
+}
+
+struct OllamaCorrection {
+    endpoint: String,
+    model: String,
+    correction_prompt: String,
+    context: Option<String>,
+    client: Client,
+}
+
+#[derive(Serialize)]
+struct OllamaGenerateRequest {
+    model: String,
+    prompt: String,
+    stream: bool,
+}
+
+#[derive(Deserialize)]
+struct OllamaGenerateResponse {
+    response: String,
 }
 
 impl LanguageSpec {
@@ -479,6 +533,7 @@ fn record(args: RecordArgs) -> Result<()> {
     let language = resolve_language(&args.language)?;
     let initial_prompt =
         build_initial_prompt(args.prompt.as_deref(), args.context_file.as_deref())?;
+    let ollama_correction = build_ollama_correction(&args)?;
     let chunk_seconds = args.chunk_seconds.max(1.0);
     let host = cpal::default_host();
     let input_devices = collect_input_devices(&host)?;
@@ -586,10 +641,16 @@ fn record(args: RecordArgs) -> Result<()> {
         selected.index, selected.name, sample_rate
     );
     eprintln!("Using model: {}", model_path.display());
+    if let Some(correction) = ollama_correction.as_ref() {
+        eprintln!(
+            "Correcting transcripts with Ollama model: {}",
+            correction.model
+        );
+    }
     stream.play().context("failed to start audio stream")?;
 
     while running.load(Ordering::SeqCst) {
-        drain_transcripts(&text_rx, &mut output_writer)?;
+        drain_transcripts(&text_rx, &mut output_writer, ollama_correction.as_ref())?;
         thread::sleep(Duration::from_millis(100));
     }
 
@@ -604,7 +665,7 @@ fn record(args: RecordArgs) -> Result<()> {
 
     loop {
         match text_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(text) => emit_transcript(&text, &mut output_writer)?,
+            Ok(text) => emit_transcript(&text, &mut output_writer, ollama_correction.as_ref())?,
             Err(RecvTimeoutError::Timeout) => {
                 if worker.is_finished() {
                     break;
@@ -617,7 +678,7 @@ fn record(args: RecordArgs) -> Result<()> {
     worker
         .join()
         .map_err(|_| anyhow!("transcription worker panicked"))??;
-    drain_transcripts(&text_rx, &mut output_writer)?;
+    drain_transcripts(&text_rx, &mut output_writer, ollama_correction.as_ref())?;
 
     if let Some(writer) = output_writer.as_mut() {
         writer.flush().context("failed to flush output file")?;
@@ -868,15 +929,32 @@ fn transcribe_chunk(
 fn drain_transcripts(
     text_rx: &Receiver<String>,
     output_writer: &mut Option<BufWriter<File>>,
+    ollama_correction: Option<&OllamaCorrection>,
 ) -> Result<()> {
     while let Ok(text) = text_rx.try_recv() {
-        emit_transcript(&text, output_writer)?;
+        emit_transcript(&text, output_writer, ollama_correction)?;
     }
     Ok(())
 }
 
-fn emit_transcript(text: &str, output_writer: &mut Option<BufWriter<File>>) -> Result<()> {
+fn emit_transcript(
+    text: &str,
+    output_writer: &mut Option<BufWriter<File>>,
+    ollama_correction: Option<&OllamaCorrection>,
+) -> Result<()> {
     let text = text.trim();
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    let corrected;
+    let text = match ollama_correction {
+        Some(correction) => {
+            corrected = correction.correct(text)?;
+            corrected.trim()
+        }
+        None => text,
+    };
     if text.is_empty() {
         return Ok(());
     }
@@ -890,6 +968,42 @@ fn emit_transcript(text: &str, output_writer: &mut Option<BufWriter<File>>) -> R
     }
 
     Ok(())
+}
+
+impl OllamaCorrection {
+    fn correct(&self, transcript: &str) -> Result<String> {
+        let request = OllamaGenerateRequest {
+            model: self.model.clone(),
+            prompt: self.prompt_for(transcript),
+            stream: false,
+        };
+
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .json(&request)
+            .send()
+            .with_context(|| format!("failed to call Ollama at {}", self.endpoint))?
+            .error_for_status()
+            .context("Ollama returned an error status")?
+            .json::<OllamaGenerateResponse>()
+            .context("failed to parse Ollama response")?;
+
+        Ok(response.response.trim().to_string())
+    }
+
+    fn prompt_for(&self, transcript: &str) -> String {
+        let mut prompt = self.correction_prompt.clone();
+
+        if let Some(context) = self.context.as_deref() {
+            prompt.push_str("\n\nContext:\n");
+            prompt.push_str(context);
+        }
+
+        prompt.push_str("\n\nTranscript:\n");
+        prompt.push_str(transcript);
+        prompt
+    }
 }
 
 fn flush_capture_buffer(
@@ -984,6 +1098,126 @@ fn build_initial_prompt(
     }
 
     Ok(Some(combined))
+}
+
+fn build_ollama_context(
+    context: Option<&str>,
+    context_file: Option<&Path>,
+    context_file_last_lines: Option<usize>,
+) -> Result<Option<String>> {
+    if context_file_last_lines == Some(0) {
+        bail!("--ollama-context-file-last-lines must be greater than 0");
+    }
+    if context_file_last_lines.is_some() && context_file.is_none() {
+        bail!("--ollama-context-file-last-lines requires --ollama-context-file <FILE>");
+    }
+
+    let mut parts = Vec::new();
+
+    if let Some(context) = context.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(context.to_string());
+    }
+
+    if let Some(path) = context_file {
+        if let Some(file_context) = read_context_file(path, context_file_last_lines)? {
+            parts.push(file_context);
+        }
+    }
+
+    if parts.is_empty() {
+        return Ok(None);
+    }
+
+    let combined = parts.join("\n\n");
+    if combined.contains('\0') {
+        bail!("Ollama context text cannot contain NUL bytes");
+    }
+
+    Ok(Some(combined))
+}
+
+fn read_context_file(path: &Path, last_non_empty_lines: Option<usize>) -> Result<Option<String>> {
+    let Some(limit) = last_non_empty_lines else {
+        let file_text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read context file {}", path.display()))?;
+        let trimmed = file_text.trim();
+        return Ok((!trimmed.is_empty()).then(|| trimmed.to_string()));
+    };
+
+    let file = File::open(path)
+        .with_context(|| format!("failed to read context file {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut lines = VecDeque::with_capacity(limit);
+
+    for line in reader.lines() {
+        let line =
+            line.with_context(|| format!("failed to read context file {}", path.display()))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if lines.len() == limit {
+            lines.pop_front();
+        }
+        lines.push_back(trimmed.to_string());
+    }
+
+    if lines.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(lines.into_iter().collect::<Vec<_>>().join("\n")))
+}
+
+fn build_ollama_correction(args: &RecordArgs) -> Result<Option<OllamaCorrection>> {
+    let Some(model) = args
+        .ollama_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        if args.ollama_context.is_some()
+            || args.ollama_context_file.is_some()
+            || args.ollama_context_file_last_lines.is_some()
+            || args.ollama_prompt.is_some()
+        {
+            bail!(
+                "--ollama-context, --ollama-context-file, --ollama-context-file-last-lines, and --ollama-prompt require --ollama-model <MODEL>"
+            );
+        }
+        return Ok(None);
+    };
+
+    let context = build_ollama_context(
+        args.ollama_context.as_deref(),
+        args.ollama_context_file.as_deref(),
+        args.ollama_context_file_last_lines,
+    )?;
+    let base_url = args.ollama_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        bail!("--ollama-url cannot be empty");
+    }
+    let correction_prompt = args
+        .ollama_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_OLLAMA_CORRECTION_PROMPT);
+    if correction_prompt.contains('\0') {
+        bail!("--ollama-prompt cannot contain NUL bytes");
+    }
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .context("failed to create Ollama HTTP client")?;
+
+    Ok(Some(OllamaCorrection {
+        endpoint: format!("{base_url}/api/generate"),
+        model: model.to_string(),
+        correction_prompt: correction_prompt.to_string(),
+        context,
+        client,
+    }))
 }
 
 fn default_model_path() -> Result<PathBuf> {
