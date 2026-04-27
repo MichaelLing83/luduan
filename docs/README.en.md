@@ -96,6 +96,15 @@ luduan record \
   --ollama-prompt "Only fix names, places, proper nouns, and clear spelling errors. Do not add content."
 ```
 
+Transcribe a WAV file for repeatable accuracy debugging:
+
+```bash
+luduan transcribe-file ./tests/fixtures/audio/case01.wav \
+  -l zh \
+  --model /path/to/ggml-large-v3.bin \
+  -f ./terms.txt
+```
+
 ## Record command features
 
 - Defaults to the system default input device
@@ -107,6 +116,7 @@ luduan record \
 - Can optionally call a local Ollama model to correct each transcript chunk with extra context before output
 - Can read only the last N non-empty lines from a large Ollama context file
 - Can override the default correction instruction with `--ollama-prompt`
+- `transcribe-file` supports the same transcription, output, and Ollama correction options for repeatable WAV audio debugging
 
 ## Model behavior
 

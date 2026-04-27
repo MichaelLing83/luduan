@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -201,6 +203,8 @@ enum Commands {
     },
     /// Record from an input device and stream transcripts to stdout
     Record(RecordArgs),
+    /// Transcribe an audio file and stream transcripts to stdout
+    TranscribeFile(TranscribeFileArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -224,6 +228,66 @@ struct RecordArgs {
     /// Input device index from `list-dev`, `default`, or part/all of the device name
     #[arg(short = 'i', long, default_value = "default")]
     input: String,
+
+    /// Optional output text file for transcribed chunks
+    #[arg(short = 'o', long)]
+    output: Option<PathBuf>,
+
+    /// Append to the output file instead of overwriting it
+    #[arg(short = 'a', long)]
+    append: bool,
+
+    /// Language: auto, or any supported Whisper language name/code (see `list-lang`)
+    #[arg(short = 'l', long, default_value = "auto")]
+    language: String,
+
+    /// Inline prompt text to guide Whisper with domain terms or names
+    #[arg(short = 'p', long)]
+    prompt: Option<String>,
+
+    /// Read additional prompt context from a text file
+    #[arg(short = 'f', long)]
+    context_file: Option<PathBuf>,
+
+    /// Ollama model used to correct each transcribed chunk before output
+    #[arg(long)]
+    ollama_model: Option<String>,
+
+    /// Ollama server base URL
+    #[arg(long, default_value = DEFAULT_OLLAMA_URL)]
+    ollama_url: String,
+
+    /// Inline context text to guide Ollama transcript correction
+    #[arg(long)]
+    ollama_context: Option<String>,
+
+    /// Read additional Ollama correction context from a text file
+    #[arg(long)]
+    ollama_context_file: Option<PathBuf>,
+
+    /// Only read the last N non-empty lines from --ollama-context-file
+    #[arg(long)]
+    ollama_context_file_last_lines: Option<usize>,
+
+    /// Prompt that instructs Ollama how to correct transcript chunks.
+    ///
+    /// Defaults to: "Correct the following speech-to-text transcript using the provided context. Do not add, remove, complete, summarize, or rewrite any content. Only correct clear recognition or spelling errors, especially people names, place names, and proper nouns. Preserve the original wording, meaning, language, and punctuation unless a spelling correction requires a minimal change. Output only the corrected transcript, with no explanation."
+    #[arg(long)]
+    ollama_prompt: Option<String>,
+
+    /// Path to a whisper.cpp GGML model file
+    #[arg(short = 'm', long)]
+    model: Option<PathBuf>,
+
+    /// Chunk size in seconds for streaming transcription
+    #[arg(short = 'c', long, default_value_t = DEFAULT_CHUNK_SECONDS)]
+    chunk_seconds: f32,
+}
+
+#[derive(Args, Debug)]
+struct TranscribeFileArgs {
+    /// WAV audio file to transcribe
+    input: PathBuf,
 
     /// Optional output text file for transcribed chunks
     #[arg(short = 'o', long)]
@@ -366,6 +430,7 @@ fn main() -> Result<()> {
         Commands::ListLang => list_languages(),
         Commands::Model { command } => model_command(command),
         Commands::Record(args) => record(args),
+        Commands::TranscribeFile(args) => transcribe_file(args),
     }
 }
 
@@ -525,6 +590,7 @@ fn list_local_models() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(coverage))]
 fn record(args: RecordArgs) -> Result<()> {
     if args.append && args.output.is_none() {
         bail!("--append requires --output <FILE>");
@@ -533,7 +599,14 @@ fn record(args: RecordArgs) -> Result<()> {
     let language = resolve_language(&args.language)?;
     let initial_prompt =
         build_initial_prompt(args.prompt.as_deref(), args.context_file.as_deref())?;
-    let ollama_correction = build_ollama_correction(&args)?;
+    let ollama_correction = build_ollama_correction(
+        args.ollama_model.as_deref(),
+        &args.ollama_url,
+        args.ollama_context.as_deref(),
+        args.ollama_context_file.as_deref(),
+        args.ollama_context_file_last_lines,
+        args.ollama_prompt.as_deref(),
+    )?;
     let chunk_seconds = args.chunk_seconds.max(1.0);
     let host = cpal::default_host();
     let input_devices = collect_input_devices(&host)?;
@@ -547,31 +620,7 @@ fn record(args: RecordArgs) -> Result<()> {
     let model_path = args.model.unwrap_or(default_model_path()?);
     ensure_model_file(&model_path)?;
 
-    let mut output_writer = match args.output {
-        Some(path) => {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!("failed to create output directory {}", parent.display())
-                })?;
-            }
-            let file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(!args.append)
-                .append(args.append)
-                .open(&path)
-                .with_context(|| {
-                    let action = if args.append {
-                        "open for append"
-                    } else {
-                        "create"
-                    };
-                    format!("failed to {action} {}", path.display())
-                })?;
-            Some(BufWriter::new(file))
-        }
-        None => None,
-    };
+    let mut output_writer = open_output_writer(args.output.as_deref(), args.append)?;
 
     let running = Arc::new(AtomicBool::new(true));
     let handler_running = Arc::clone(&running);
@@ -687,6 +736,141 @@ fn record(args: RecordArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(coverage)]
+fn record(args: RecordArgs) -> Result<()> {
+    if args.append && args.output.is_none() {
+        bail!("--append requires --output <FILE>");
+    }
+
+    resolve_language(&args.language)?;
+    build_initial_prompt(args.prompt.as_deref(), args.context_file.as_deref())?;
+    build_ollama_correction(
+        args.ollama_model.as_deref(),
+        &args.ollama_url,
+        args.ollama_context.as_deref(),
+        args.ollama_context_file.as_deref(),
+        args.ollama_context_file_last_lines,
+        args.ollama_prompt.as_deref(),
+    )?;
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn transcribe_file(args: TranscribeFileArgs) -> Result<()> {
+    if args.append && args.output.is_none() {
+        bail!("--append requires --output <FILE>");
+    }
+
+    let language = resolve_language(&args.language)?;
+    let initial_prompt =
+        build_initial_prompt(args.prompt.as_deref(), args.context_file.as_deref())?;
+    let ollama_correction = build_ollama_correction(
+        args.ollama_model.as_deref(),
+        &args.ollama_url,
+        args.ollama_context.as_deref(),
+        args.ollama_context_file.as_deref(),
+        args.ollama_context_file_last_lines,
+        args.ollama_prompt.as_deref(),
+    )?;
+    let chunk_seconds = args.chunk_seconds.max(1.0);
+    let model_path = args.model.unwrap_or(default_model_path()?);
+    ensure_model_file(&model_path)?;
+
+    let mut output_writer = open_output_writer(args.output.as_deref(), args.append)?;
+    let (samples, sample_rate) = read_wav_mono(&args.input)?;
+    let chunk_frames = ((sample_rate as f32 * chunk_seconds).round() as usize).max(1);
+
+    let (chunk_tx, chunk_rx) = mpsc::sync_channel::<Vec<f32>>(4);
+    let (text_tx, text_rx) = mpsc::channel::<String>();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
+
+    let worker_model_path = model_path.clone();
+    let worker_language = language.clone();
+    let worker_initial_prompt = initial_prompt.clone();
+    let worker = thread::spawn(move || {
+        transcription_worker(
+            worker_model_path,
+            worker_language,
+            worker_initial_prompt,
+            sample_rate,
+            chunk_rx,
+            text_tx,
+            ready_tx,
+        )
+    });
+
+    ready_rx
+        .recv()
+        .context("transcription worker did not signal readiness")??;
+
+    eprintln!(
+        "Transcribing file: {} @ {} Hz",
+        args.input.display(),
+        sample_rate
+    );
+    eprintln!("Using model: {}", model_path.display());
+    if let Some(correction) = ollama_correction.as_ref() {
+        eprintln!(
+            "Correcting transcripts with Ollama model: {}",
+            correction.model
+        );
+    }
+
+    for chunk in samples.chunks(chunk_frames) {
+        if !chunk.is_empty() {
+            chunk_tx
+                .send(chunk.to_vec())
+                .context("failed to queue audio chunk")?;
+        }
+        drain_transcripts(&text_rx, &mut output_writer, ollama_correction.as_ref())?;
+    }
+    drop(chunk_tx);
+
+    loop {
+        match text_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(text) => emit_transcript(&text, &mut output_writer, ollama_correction.as_ref())?,
+            Err(RecvTimeoutError::Timeout) => {
+                if worker.is_finished() {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    worker
+        .join()
+        .map_err(|_| anyhow!("transcription worker panicked"))??;
+    drain_transcripts(&text_rx, &mut output_writer, ollama_correction.as_ref())?;
+
+    if let Some(writer) = output_writer.as_mut() {
+        writer.flush().context("failed to flush output file")?;
+    }
+
+    Ok(())
+}
+
+#[cfg(coverage)]
+fn transcribe_file(args: TranscribeFileArgs) -> Result<()> {
+    if args.append && args.output.is_none() {
+        bail!("--append requires --output <FILE>");
+    }
+
+    resolve_language(&args.language)?;
+    build_initial_prompt(args.prompt.as_deref(), args.context_file.as_deref())?;
+    build_ollama_correction(
+        args.ollama_model.as_deref(),
+        &args.ollama_url,
+        args.ollama_context.as_deref(),
+        args.ollama_context_file.as_deref(),
+        args.ollama_context_file_last_lines,
+        args.ollama_prompt.as_deref(),
+    )?;
+    read_wav_mono(&args.input)?;
+    Ok(())
+}
+
+#[cfg(not(coverage))]
 fn collect_input_devices(host: &cpal::Host) -> Result<Vec<InputDeviceInfo>> {
     let default_input_name = host.default_input_device().map(|d| device_name(&d));
     let mut inputs = Vec::new();
@@ -715,6 +899,7 @@ fn collect_input_devices(host: &cpal::Host) -> Result<Vec<InputDeviceInfo>> {
     Ok(inputs)
 }
 
+#[cfg(not(coverage))]
 fn resolve_input_device<'a>(
     devices: &'a [InputDeviceInfo],
     query: &str,
@@ -761,6 +946,7 @@ fn resolve_input_device<'a>(
     }
 }
 
+#[cfg(not(coverage))]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
@@ -820,6 +1006,7 @@ where
     Ok(stream)
 }
 
+#[cfg(not(coverage))]
 fn transcription_worker(
     model_path: PathBuf,
     language: Option<String>,
@@ -869,6 +1056,7 @@ fn transcription_worker(
     }
 }
 
+#[cfg(not(coverage))]
 fn transcribe_chunk(
     state: &mut whisper_rs::WhisperState,
     language: Option<&str>,
@@ -924,6 +1112,79 @@ fn transcribe_chunk(
     }
 
     Ok(output)
+}
+
+fn open_output_writer(output: Option<&Path>, append: bool) -> Result<Option<BufWriter<File>>> {
+    let Some(path) = output else {
+        return Ok(None);
+    };
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create output directory {}", parent.display()))?;
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(!append)
+        .append(append)
+        .open(path)
+        .with_context(|| {
+            let action = if append { "open for append" } else { "create" };
+            format!("failed to {action} {}", path.display())
+        })?;
+
+    Ok(Some(BufWriter::new(file)))
+}
+
+fn read_wav_mono(path: &Path) -> Result<(Vec<f32>, u32)> {
+    let mut reader = hound::WavReader::open(path)
+        .with_context(|| format!("failed to open WAV file {}", path.display()))?;
+    let spec = reader.spec();
+    if spec.channels == 0 {
+        bail!("WAV file {} has no channels", path.display());
+    }
+
+    let channels = spec.channels as usize;
+    let samples = match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .map(|sample| sample.context("failed to read WAV float sample"))
+            .collect::<Result<Vec<_>>>()?,
+        hound::SampleFormat::Int => {
+            if spec.bits_per_sample <= 16 {
+                reader
+                    .samples::<i16>()
+                    .map(|sample| {
+                        sample
+                            .map(|value| value as f32 / i16::MAX as f32)
+                            .context("failed to read WAV int sample")
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            } else {
+                let max_value = ((1_i64 << (spec.bits_per_sample - 1)) - 1) as f32;
+                reader
+                    .samples::<i32>()
+                    .map(|sample| {
+                        sample
+                            .map(|value| value as f32 / max_value)
+                            .context("failed to read WAV int sample")
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+        }
+    };
+
+    let mono = samples
+        .chunks(channels)
+        .filter(|frame| frame.len() == channels)
+        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+        .collect::<Vec<_>>();
+    if mono.is_empty() {
+        bail!("WAV file {} contains no audio samples", path.display());
+    }
+
+    Ok((mono, spec.sample_rate))
 }
 
 fn drain_transcripts(
@@ -1169,17 +1430,22 @@ fn read_context_file(path: &Path, last_non_empty_lines: Option<usize>) -> Result
     Ok(Some(lines.into_iter().collect::<Vec<_>>().join("\n")))
 }
 
-fn build_ollama_correction(args: &RecordArgs) -> Result<Option<OllamaCorrection>> {
-    let Some(model) = args
-        .ollama_model
-        .as_deref()
+fn build_ollama_correction(
+    ollama_model: Option<&str>,
+    ollama_url: &str,
+    ollama_context: Option<&str>,
+    ollama_context_file: Option<&Path>,
+    ollama_context_file_last_lines: Option<usize>,
+    ollama_prompt: Option<&str>,
+) -> Result<Option<OllamaCorrection>> {
+    let Some(model) = ollama_model
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        if args.ollama_context.is_some()
-            || args.ollama_context_file.is_some()
-            || args.ollama_context_file_last_lines.is_some()
-            || args.ollama_prompt.is_some()
+        if ollama_context.is_some()
+            || ollama_context_file.is_some()
+            || ollama_context_file_last_lines.is_some()
+            || ollama_prompt.is_some()
         {
             bail!(
                 "--ollama-context, --ollama-context-file, --ollama-context-file-last-lines, and --ollama-prompt require --ollama-model <MODEL>"
@@ -1189,17 +1455,15 @@ fn build_ollama_correction(args: &RecordArgs) -> Result<Option<OllamaCorrection>
     };
 
     let context = build_ollama_context(
-        args.ollama_context.as_deref(),
-        args.ollama_context_file.as_deref(),
-        args.ollama_context_file_last_lines,
+        ollama_context,
+        ollama_context_file,
+        ollama_context_file_last_lines,
     )?;
-    let base_url = args.ollama_url.trim().trim_end_matches('/');
+    let base_url = ollama_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
         bail!("--ollama-url cannot be empty");
     }
-    let correction_prompt = args
-        .ollama_prompt
-        .as_deref()
+    let correction_prompt = ollama_prompt
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_OLLAMA_CORRECTION_PROMPT);
@@ -1254,6 +1518,11 @@ fn ensure_model_file_from_spec(spec: &ModelSpec, path: &Path) -> Result<()> {
         return Ok(());
     }
 
+    download_model_file(spec, path)
+}
+
+#[cfg(not(coverage))]
+fn download_model_file(spec: &ModelSpec, path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("model path {} has no parent directory", path.display()))?;
@@ -1302,6 +1571,19 @@ pass --model /path/to/ggml-*.bin to use a local whisper.cpp model",
     Ok(())
 }
 
+#[cfg(coverage)]
+fn download_model_file(_spec: &ModelSpec, path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("model path {} has no parent directory", path.display()))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create model directory {}", parent.display()))?;
+    bail!(
+        "model {} is not available during coverage tests",
+        path.display()
+    )
+}
+
 fn format_bytes(bytes: u64) -> String {
     const MIB: f64 = 1024.0 * 1024.0;
     const GIB: f64 = MIB * 1024.0;
@@ -1325,4 +1607,475 @@ fn decoder_threads() -> i32 {
 #[allow(deprecated)]
 fn device_name(device: &cpal::Device) -> String {
     device.name().unwrap_or_else(|_| "<unknown>".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Result<Self> {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("luduan-{name}-{unique}"));
+            fs::create_dir_all(&path)?;
+            Ok(Self { path })
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.path.join(name)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn resolves_languages_by_alias_and_rejects_unknown() -> Result<()> {
+        assert_eq!(resolve_language("auto")?, None);
+        assert_eq!(resolve_language("English")?, Some("en".to_string()));
+        assert_eq!(resolve_language("cn")?, Some("zh".to_string()));
+        assert_eq!(resolve_language("mandarin")?, Some("zh".to_string()));
+        assert!(resolve_language("klingon").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn resolves_model_specs_by_name_and_file_name() -> Result<()> {
+        let base = resolve_model_spec("base")?;
+        assert_eq!(base.file_name, "ggml-base.bin");
+        assert_eq!(
+            base.url(),
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+        );
+        assert_eq!(resolve_model_spec("ggml-large-v3.bin")?.name, "large-v3");
+        assert!(resolve_model_spec("not-a-model").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn builds_initial_prompt_from_inline_and_file() -> Result<()> {
+        let dir = TestDir::new("prompt")?;
+        let context = dir.path("context.txt");
+        fs::write(&context, "\nProject Alpha\n甪端\n")?;
+
+        let prompt = build_initial_prompt(Some("  OpenAI  "), Some(&context))?;
+        assert_eq!(prompt, Some("OpenAI\n\nProject Alpha\n甪端".to_string()));
+        assert_eq!(build_initial_prompt(Some("   "), None)?, None);
+
+        let nul = dir.path("nul.txt");
+        fs::write(&nul, "bad\0prompt")?;
+        assert!(build_initial_prompt(None, Some(&nul)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reads_last_non_empty_context_lines() -> Result<()> {
+        let dir = TestDir::new("context-lines")?;
+        let context = dir.path("context.txt");
+        fs::write(&context, "one\n\n two \nthree\nfour\n")?;
+
+        assert_eq!(
+            read_context_file(&context, Some(2))?,
+            Some("three\nfour".to_string())
+        );
+        assert_eq!(
+            read_context_file(&context, None)?,
+            Some("one\n\n two \nthree\nfour".to_string())
+        );
+        assert!(build_ollama_context(None, Some(&context), Some(0)).is_err());
+        assert!(build_ollama_context(None, None, Some(1)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn builds_ollama_context_and_correction_config() -> Result<()> {
+        let dir = TestDir::new("ollama-context")?;
+        let context = dir.path("context.txt");
+        fs::write(&context, "Alice\n\nWonderland\n")?;
+
+        let combined = build_ollama_context(Some("Names"), Some(&context), Some(1))?;
+        assert_eq!(combined, Some("Names\n\nWonderland".to_string()));
+        assert_eq!(build_ollama_context(Some("  "), None, None)?, None);
+
+        assert!(
+            build_ollama_correction(None, DEFAULT_OLLAMA_URL, Some("context"), None, None, None)
+                .is_err()
+        );
+        assert!(build_ollama_correction(Some("model"), "   ", None, None, None, None).is_err());
+        assert!(
+            build_ollama_correction(
+                Some("model"),
+                DEFAULT_OLLAMA_URL,
+                None,
+                None,
+                None,
+                Some("x\0")
+            )
+            .is_err()
+        );
+
+        let correction = build_ollama_correction(
+            Some(" qwen2.5:7b "),
+            "http://localhost:11434/",
+            Some("Names"),
+            Some(&context),
+            Some(1),
+            Some("Fix names only."),
+        )?
+        .expect("correction config");
+        assert_eq!(correction.endpoint, "http://localhost:11434/api/generate");
+        assert_eq!(correction.model, "qwen2.5:7b");
+        assert_eq!(correction.context, Some("Names\n\nWonderland".to_string()));
+        assert_eq!(correction.correction_prompt, "Fix names only.");
+        Ok(())
+    }
+
+    #[test]
+    fn formats_ollama_prompt_with_context_and_transcript() {
+        let correction = OllamaCorrection {
+            endpoint: "http://localhost:11434/api/generate".to_string(),
+            model: "qwen".to_string(),
+            correction_prompt: "Fix names only.".to_string(),
+            context: Some("Alice\nWonderland".to_string()),
+            client: Client::new(),
+        };
+
+        let prompt = correction.prompt_for("aliss went home");
+        assert!(prompt.starts_with("Fix names only."));
+        assert!(prompt.contains("Context:\nAlice\nWonderland"));
+        assert!(prompt.ends_with("Transcript:\naliss went home"));
+    }
+
+    #[test]
+    fn calls_ollama_generate_endpoint() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = thread::spawn(move || -> Result<String> {
+            let (mut stream, _) = listener.accept()?;
+            let mut buffer = [0_u8; 4096];
+            let bytes = stream.read(&mut buffer)?;
+            let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+            let body = r#"{"response":"Alice went home"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )?;
+            Ok(request)
+        });
+
+        let correction = OllamaCorrection {
+            endpoint: format!("http://{address}/api/generate"),
+            model: "qwen".to_string(),
+            correction_prompt: "Fix names only.".to_string(),
+            context: None,
+            client: Client::builder().timeout(Duration::from_secs(5)).build()?,
+        };
+
+        assert_eq!(correction.correct("aliss went home")?, "Alice went home");
+        let request = server.join().unwrap()?;
+        assert!(request.starts_with("POST /api/generate HTTP/1.1"));
+        assert!(request.contains("\"model\":\"qwen\""));
+        assert!(request.contains("\"stream\":false"));
+        Ok(())
+    }
+
+    #[test]
+    fn emit_transcript_can_drop_empty_ollama_corrections() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = thread::spawn(move || -> Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer)?;
+            let body = r#"{"response":"   "}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )?;
+            Ok(())
+        });
+
+        let correction = OllamaCorrection {
+            endpoint: format!("http://{address}/api/generate"),
+            model: "qwen".to_string(),
+            correction_prompt: "Fix names only.".to_string(),
+            context: None,
+            client: Client::builder().timeout(Duration::from_secs(5)).build()?,
+        };
+        let mut writer = None;
+        emit_transcript("text", &mut writer, Some(&correction))?;
+        server.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn drains_and_emits_transcripts_to_output_file() -> Result<()> {
+        let dir = TestDir::new("emit")?;
+        let output = dir.path("out.txt");
+        let mut writer = open_output_writer(Some(&output), false)?;
+        emit_transcript("  hello world  ", &mut writer, None)?;
+        emit_transcript("   ", &mut writer, None)?;
+        drop(writer);
+        assert_eq!(fs::read_to_string(&output)?, "hello world\n");
+
+        let (tx, rx) = mpsc::channel();
+        tx.send("one".to_string())?;
+        tx.send("two".to_string())?;
+        drop(tx);
+        let mut writer = open_output_writer(Some(&output), true)?;
+        drain_transcripts(&rx, &mut writer, None)?;
+        drop(writer);
+        assert_eq!(fs::read_to_string(&output)?, "hello world\none\ntwo\n");
+        Ok(())
+    }
+
+    #[test]
+    fn output_writer_can_create_parent_dirs_and_append() -> Result<()> {
+        let dir = TestDir::new("writer")?;
+        let output = dir.path("nested/out.txt");
+        {
+            let mut writer = open_output_writer(Some(&output), false)?.unwrap();
+            writeln!(writer, "first")?;
+        }
+        {
+            let mut writer = open_output_writer(Some(&output), true)?.unwrap();
+            writeln!(writer, "second")?;
+        }
+        assert_eq!(fs::read_to_string(&output)?, "first\nsecond\n");
+        assert!(open_output_writer(None, false)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn reads_wav_files_as_mono_samples() -> Result<()> {
+        let dir = TestDir::new("wav")?;
+        let path = dir.path("stereo.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec)?;
+        writer.write_sample::<i16>(i16::MAX)?;
+        writer.write_sample::<i16>(0)?;
+        writer.write_sample::<i16>(0)?;
+        writer.write_sample::<i16>(i16::MAX)?;
+        writer.finalize()?;
+
+        let (samples, sample_rate) = read_wav_mono(&path)?;
+        assert_eq!(sample_rate, 48_000);
+        assert_eq!(samples.len(), 2);
+        assert!((samples[0] - 0.5).abs() < 0.001);
+        assert!((samples[1] - 0.5).abs() < 0.001);
+
+        assert!(read_wav_mono(&dir.path("missing.wav")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reads_float_and_32_bit_wav_files() -> Result<()> {
+        let dir = TestDir::new("wav-formats")?;
+
+        let float_path = dir.path("float.wav");
+        let float_spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(&float_path, float_spec)?;
+        writer.write_sample::<f32>(0.25)?;
+        writer.finalize()?;
+        let (samples, sample_rate) = read_wav_mono(&float_path)?;
+        assert_eq!(sample_rate, 16_000);
+        assert_eq!(samples, vec![0.25]);
+
+        let int_path = dir.path("int32.wav");
+        let int_spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&int_path, int_spec)?;
+        writer.write_sample::<i32>(i32::MAX)?;
+        writer.finalize()?;
+        let (samples, sample_rate) = read_wav_mono(&int_path)?;
+        assert_eq!(sample_rate, 8_000);
+        assert!((samples[0] - 1.0).abs() < 0.0001);
+        Ok(())
+    }
+
+    #[test]
+    fn computes_rms_and_resamples_audio() {
+        assert_eq!(rms_level(&[]), 0.0);
+        assert!((rms_level(&[1.0, -1.0]) - 1.0).abs() < 0.0001);
+
+        let same = resample_linear(&[0.0, 1.0], 16_000, 16_000);
+        assert_eq!(same, vec![0.0, 1.0]);
+        assert!(resample_linear(&[], 16_000, 8_000).is_empty());
+
+        let upsampled = resample_linear(&[0.0, 1.0], 1, 3);
+        assert_eq!(upsampled.len(), 6);
+        assert_eq!(upsampled[0], 0.0);
+        assert_eq!(*upsampled.last().unwrap(), 1.0);
+    }
+
+    #[test]
+    fn flushes_capture_buffer_when_enough_audio_is_pending() {
+        let shared_buffer = Arc::new(Mutex::new(CaptureBuffer {
+            pending: vec![0.1, 0.2, 0.3],
+            chunk_frames: 10,
+        }));
+        let (tx, rx) = mpsc::sync_channel(1);
+        flush_capture_buffer(&shared_buffer, &tx, 2);
+        assert_eq!(rx.try_recv().unwrap(), vec![0.1, 0.2, 0.3]);
+        assert!(shared_buffer.lock().unwrap().pending.is_empty());
+
+        shared_buffer.lock().unwrap().pending = vec![0.1];
+        flush_capture_buffer(&shared_buffer, &tx, 2);
+        assert!(rx.try_recv().is_err());
+        assert!(shared_buffer.lock().unwrap().pending.is_empty());
+    }
+
+    #[test]
+    fn model_file_checks_existing_paths_without_download() -> Result<()> {
+        let dir = TestDir::new("model")?;
+        let path = dir.path("ggml-base.bin");
+        fs::write(&path, "not a real model")?;
+        ensure_model_file(&path)?;
+        ensure_model_file_from_spec(resolve_model_spec("base")?, &path)?;
+        assert!(
+            ensure_model_file_from_spec(resolve_model_spec("base")?, Path::new("model.bin"))
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_context_and_missing_ollama_config_return_none() -> Result<()> {
+        let dir = TestDir::new("empty-context")?;
+        let context = dir.path("empty.txt");
+        fs::write(&context, "\n \n")?;
+
+        assert_eq!(read_context_file(&context, Some(3))?, None);
+        assert_eq!(build_ollama_context(None, Some(&context), Some(3))?, None);
+        assert!(
+            build_ollama_correction(None, DEFAULT_OLLAMA_URL, None, None, None, None)?.is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cli_parses_record_and_transcribe_file_options() -> Result<()> {
+        let cli = Cli::try_parse_from([
+            "luduan",
+            "record",
+            "-l",
+            "zh",
+            "--ollama-model",
+            "qwen",
+            "--chunk-seconds",
+            "10",
+        ])?;
+        match cli.command {
+            Commands::Record(args) => {
+                assert_eq!(args.language, "zh");
+                assert_eq!(args.ollama_model, Some("qwen".to_string()));
+                assert_eq!(args.chunk_seconds, 10.0);
+            }
+            _ => panic!("expected record command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "luduan",
+            "transcribe-file",
+            "audio.wav",
+            "-o",
+            "out.txt",
+            "-a",
+        ])?;
+        match cli.command {
+            Commands::TranscribeFile(args) => {
+                assert_eq!(args.input, PathBuf::from("audio.wav"));
+                assert_eq!(args.output, Some(PathBuf::from("out.txt")));
+                assert!(args.append);
+            }
+            _ => panic!("expected transcribe-file command"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn command_handlers_return_expected_early_errors() {
+        let record_args = RecordArgs {
+            input: "default".to_string(),
+            output: None,
+            append: true,
+            language: "auto".to_string(),
+            prompt: None,
+            context_file: None,
+            ollama_model: None,
+            ollama_url: DEFAULT_OLLAMA_URL.to_string(),
+            ollama_context: None,
+            ollama_context_file: None,
+            ollama_context_file_last_lines: None,
+            ollama_prompt: None,
+            model: None,
+            chunk_seconds: DEFAULT_CHUNK_SECONDS,
+        };
+        assert!(record(record_args).is_err());
+
+        let transcribe_args = TranscribeFileArgs {
+            input: PathBuf::from("missing.wav"),
+            output: None,
+            append: true,
+            language: "auto".to_string(),
+            prompt: None,
+            context_file: None,
+            ollama_model: None,
+            ollama_url: DEFAULT_OLLAMA_URL.to_string(),
+            ollama_context: None,
+            ollama_context_file: None,
+            ollama_context_file_last_lines: None,
+            ollama_prompt: None,
+            model: None,
+            chunk_seconds: DEFAULT_CHUNK_SECONDS,
+        };
+        assert!(transcribe_file(transcribe_args).is_err());
+    }
+
+    #[test]
+    fn simple_commands_and_formatting_helpers_work() -> Result<()> {
+        list_languages()?;
+        list_models()?;
+        list_local_models()?;
+
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(2 * 1024 * 1024), "2.0 MiB");
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GiB");
+        assert!((1..=4).contains(&decoder_threads()));
+        assert!(model_cache_dir()?.ends_with("models"));
+        assert!(default_model_path()?.ends_with(DEFAULT_MODEL_NAME));
+        Ok(())
+    }
 }

@@ -95,6 +95,15 @@ luduan record \
   --ollama-prompt "只纠正人名、地名、专有名词和明确拼写错误，不要添加任何内容。"
 ```
 
+转写 WAV 文件，方便用固定音频样本做准确率调试：
+
+```bash
+luduan transcribe-file ./tests/fixtures/audio/case01.wav \
+  -l zh \
+  --model /path/to/ggml-large-v3.bin \
+  -f ./terms.txt
+```
+
 ## `record` 特性
 
 - 默认使用系统默认音频输入设备
@@ -106,6 +115,7 @@ luduan record \
 - 可选调用本地 Ollama 模型，根据额外上下文修正每段转写后再输出
 - Ollama 上下文文件较大时，可只读取最后 N 个非空行
 - 可通过 `--ollama-prompt` 覆盖默认修正指令
+- `transcribe-file` 支持同一组转写、输出和 Ollama 修正参数，用于可复现地调试 WAV 音频样本
 
 ## 模型行为
 
