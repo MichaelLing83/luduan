@@ -1,5 +1,5 @@
 #luduan benchmark --fixtures ./tests/fixtures/e2e --model-name large-v3 --chunk-seconds 3,5,8,10 --whisper-no-context true,false --whisper-single-segment true,false --whisper-best-of 1,3 --silence-threshold 0.001,0.003 --ollama-model none,qwen3.5:0.8b,qwen3.5:2b,gemma3:1b,deepseek-r1:1.5b
-cargo run -- benchmark --fixtures ./tests/fixtures/e2e --model-name large-v3 --chunk-seconds 3,6,10 --whisper-no-context true,false --whisper-single-segment true,false --whisper-best-of 1,3 --silence-threshold 0.001,0.003 --ollama-model none,qwen3.5:0.8b
+cargo run -- benchmark --fixtures ./tests/fixtures/e2e --model-name large-v3 --chunk-seconds 25 --whisper-no-context true --whisper-single-segment true --whisper-best-of 3 --silence-threshold 0.003 --ollama-model none
 
 # cargo run -- benchmark --fixtures ./tests/fixtures/e2e --model-name large-v3 --chunk-seconds 3
 #001 accuracy=42.86% model=large-v3 chunk=3 language=fixture ollama=none output=target/benchmark/1777446058/run-001
