@@ -1,0 +1,4 @@
+This is an end-to-end transcription test for the Luduan command line tool.
+The product update includes Whisper large v3, Ollama correction, and a repeatable WAV file workflow.
+Michael will compare the output against this reference transcript on Monday morning.
+Please preserve the names Luduan, OpenAI, Qwen, Rust, and macOS exactly as written.

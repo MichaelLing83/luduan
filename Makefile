@@ -1,4 +1,4 @@
-.PHONY: build check test run release install clean
+.PHONY: build check test benchmark run release install clean
 
 build:
 	@cargo build --release
@@ -8,6 +8,10 @@ check:
 
 test:
 	@./test.sh
+
+benchmark:
+	@cargo run -- benchmark $(ARGS)
+
 
 run:
 	@cargo run -- $(ARGS)

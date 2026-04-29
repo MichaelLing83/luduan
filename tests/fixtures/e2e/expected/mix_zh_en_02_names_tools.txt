@@ -1,0 +1,4 @@
+这条测试包含中文句子和 English product names。
+Michael 在北京说，我们需要比较 Whisper、Ollama、Cursor 和 GitHub Actions 的输出。
+Alice 负责 audio recording，Bob 负责 expected transcript，陈明负责 review。
+最终目标是让 Luduan 在 mixed Chinese and English scenarios 里稳定识别人名、工具名和地名。

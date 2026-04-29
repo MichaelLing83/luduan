@@ -101,8 +101,22 @@ Transcribe a WAV file for repeatable accuracy debugging:
 ```bash
 luduan transcribe-file ./tests/fixtures/audio/case01.wav \
   -l zh \
-  --model /path/to/ggml-large-v3.bin \
+  --model-name large-v3 \
   -f ./terms.txt
+```
+
+Search parameter combinations and pick the best transcription setup for the fixture set:
+
+```bash
+luduan benchmark \
+  --fixtures tests/fixtures/e2e \
+  --model-name large-v3,large-v3-turbo \
+  --chunk-seconds 5,10 \
+  --whisper-no-context true,false \
+  --whisper-single-segment true,false \
+  --whisper-best-of 1,3 \
+  --silence-threshold 0.001,0.003 \
+  --ollama-model none,qwen2.5:7b
 ```
 
 ## Record command features
@@ -117,6 +131,8 @@ luduan transcribe-file ./tests/fixtures/audio/case01.wav \
 - Can read only the last N non-empty lines from a large Ollama context file
 - Can override the default correction instruction with `--ollama-prompt`
 - `transcribe-file` supports the same transcription, output, and Ollama correction options for repeatable WAV audio debugging
+- `record` and `transcribe-file` can tune Whisper with `--whisper-no-context`, `--whisper-single-segment`, `--whisper-best-of`, and `--silence-threshold`
+- `benchmark` can read fixture audio, sweep model/chunk/Whisper/Ollama candidates, and report the best configuration
 
 ## Model behavior
 
@@ -130,4 +146,5 @@ You can also provide your own model explicitly:
 
 ```bash
 luduan record --model /path/to/ggml-*.bin
+luduan record --model-name large-v3
 ```

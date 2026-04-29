@@ -1,0 +1,4 @@
+Customer support received three reports from Stockholm, Paris, and Singapore.
+The first report mentioned audio clipping near the beginning of the recording.
+The second report mentioned confusing the name Alice with Ellis.
+The third report asked whether transcribe-file can use the same prompt and context options as record.

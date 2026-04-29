@@ -11,11 +11,12 @@ use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
@@ -205,6 +206,8 @@ enum Commands {
     Record(RecordArgs),
     /// Transcribe an audio file and stream transcripts to stdout
     TranscribeFile(TranscribeFileArgs),
+    /// Benchmark transcription accuracy across fixture audio and parameter grids
+    Benchmark(BenchmarkArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -279,9 +282,29 @@ struct RecordArgs {
     #[arg(short = 'm', long)]
     model: Option<PathBuf>,
 
+    /// Model name from `luduan model list`, e.g. `base`, `large-v3`, `base.en`
+    #[arg(long)]
+    model_name: Option<String>,
+
     /// Chunk size in seconds for streaming transcription
     #[arg(short = 'c', long, default_value_t = DEFAULT_CHUNK_SECONDS)]
     chunk_seconds: f32,
+
+    /// Whether each Whisper chunk should ignore previous context
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    whisper_no_context: bool,
+
+    /// Whether Whisper should force a single output segment per chunk
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    whisper_single_segment: bool,
+
+    /// Whisper greedy decoder best_of value
+    #[arg(long, default_value_t = 1)]
+    whisper_best_of: i32,
+
+    /// RMS threshold below which chunks are treated as silence
+    #[arg(long, default_value_t = SILENCE_RMS_THRESHOLD)]
+    silence_threshold: f32,
 }
 
 #[derive(Args, Debug)]
@@ -339,9 +362,128 @@ struct TranscribeFileArgs {
     #[arg(short = 'm', long)]
     model: Option<PathBuf>,
 
+    /// Model name from `luduan model list`, e.g. `base`, `large-v3`, `base.en`
+    #[arg(long)]
+    model_name: Option<String>,
+
     /// Chunk size in seconds for streaming transcription
     #[arg(short = 'c', long, default_value_t = DEFAULT_CHUNK_SECONDS)]
     chunk_seconds: f32,
+
+    /// Whether each Whisper chunk should ignore previous context
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    whisper_no_context: bool,
+
+    /// Whether Whisper should force a single output segment per chunk
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    whisper_single_segment: bool,
+
+    /// Whisper greedy decoder best_of value
+    #[arg(long, default_value_t = 1)]
+    whisper_best_of: i32,
+
+    /// RMS threshold below which chunks are treated as silence
+    #[arg(long, default_value_t = SILENCE_RMS_THRESHOLD)]
+    silence_threshold: f32,
+}
+
+#[derive(Args, Debug)]
+struct BenchmarkArgs {
+    /// Fixture directory containing manifest.tsv, expected/, audio/, and optional context.txt
+    #[arg(long, default_value = "tests/fixtures/e2e")]
+    fixtures: PathBuf,
+
+    /// Run only this case id. Can be passed multiple times
+    #[arg(long = "case")]
+    cases: Vec<String>,
+
+    /// Path to a whisper.cpp GGML model file
+    #[arg(short = 'm', long)]
+    model: Option<PathBuf>,
+
+    /// Comma-separated model names from `luduan model list`, e.g. large-v3,large-v3-turbo
+    #[arg(long)]
+    model_name: Option<String>,
+
+    /// Comma-separated chunk sizes in seconds, e.g. 5,10,15
+    #[arg(long, default_value = "5")]
+    chunk_seconds: String,
+
+    /// Comma-separated Whisper no-context values, true or false
+    #[arg(long, default_value = "true")]
+    whisper_no_context: String,
+
+    /// Comma-separated Whisper single-segment values, true or false
+    #[arg(long, default_value = "true")]
+    whisper_single_segment: String,
+
+    /// Comma-separated Whisper greedy decoder best_of values, e.g. 1,3,5
+    #[arg(long, default_value = "1")]
+    whisper_best_of: String,
+
+    /// Comma-separated RMS silence thresholds, e.g. 0,0.001,0.003
+    #[arg(long, default_value = "0.003")]
+    silence_threshold: String,
+
+    /// Comma-separated languages, or fixture to use each manifest language
+    #[arg(long, default_value = "fixture")]
+    language: String,
+
+    /// Whisper context file. Defaults to fixtures/context.txt when present
+    #[arg(short = 'f', long)]
+    context_file: Option<PathBuf>,
+
+    /// Do not pass a Whisper context file
+    #[arg(long)]
+    no_context: bool,
+
+    /// Comma-separated Ollama models. Use none to disable Ollama for a run
+    #[arg(long, default_value = "none")]
+    ollama_model: String,
+
+    /// Ollama server base URL
+    #[arg(long, default_value = DEFAULT_OLLAMA_URL)]
+    ollama_url: String,
+
+    /// Ollama correction context file. Defaults to fixtures/context.txt when Ollama is enabled
+    #[arg(long)]
+    ollama_context_file: Option<PathBuf>,
+
+    /// Comma-separated last-line limits for Ollama context. Use none for full file
+    #[arg(long, default_value = "none")]
+    ollama_context_file_last_lines: String,
+
+    /// Prompt that instructs Ollama how to correct transcript chunks
+    #[arg(long)]
+    ollama_prompt: Option<String>,
+
+    /// Output directory for benchmark runs
+    #[arg(long, default_value = "target/benchmark")]
+    output_dir: PathBuf,
+
+    /// Keep converted WAV files in the output directory
+    #[arg(long)]
+    keep_wav: bool,
+
+    /// Fail if a manifest case has no matching audio file
+    #[arg(long)]
+    require_audio: bool,
+
+    /// Keep letter case when computing accuracy
+    #[arg(long)]
+    preserve_case: bool,
+
+    /// Keep punctuation when computing accuracy
+    #[arg(long)]
+    keep_punctuation: bool,
+
+    /// Keep whitespace when computing accuracy
+    #[arg(long)]
+    keep_whitespace: bool,
+
+    /// Exit with failure if best overall accuracy is below this percentage
+    #[arg(long)]
+    fail_under: Option<f32>,
 }
 
 #[derive(Clone)]
@@ -377,6 +519,51 @@ struct OllamaCorrection {
     correction_prompt: String,
     context: Option<String>,
     client: Client,
+}
+
+#[derive(Clone, Copy)]
+struct WhisperOptions {
+    no_context: bool,
+    single_segment: bool,
+    best_of: i32,
+    silence_threshold: f32,
+}
+
+#[derive(Clone)]
+struct BenchmarkCase {
+    id: String,
+    language: String,
+    expected_text: PathBuf,
+    audio_file: PathBuf,
+}
+
+#[derive(Clone)]
+struct BenchmarkConfig {
+    model_label: String,
+    model_path: PathBuf,
+    chunk_seconds: f32,
+    language: Option<String>,
+    ollama_model: Option<String>,
+    ollama_context_file_last_lines: Option<usize>,
+    whisper: WhisperOptions,
+}
+
+struct BenchmarkCaseResult {
+    case_id: String,
+    language: String,
+    status: String,
+    expected_chars: usize,
+    distance: usize,
+    accuracy: f32,
+    message: Option<String>,
+}
+
+struct BenchmarkRunResult {
+    index: usize,
+    config: BenchmarkConfig,
+    output_dir: PathBuf,
+    cases: Vec<BenchmarkCaseResult>,
+    accuracy: f32,
 }
 
 #[derive(Serialize)]
@@ -431,6 +618,7 @@ fn main() -> Result<()> {
         Commands::Model { command } => model_command(command),
         Commands::Record(args) => record(args),
         Commands::TranscribeFile(args) => transcribe_file(args),
+        Commands::Benchmark(args) => benchmark(args),
     }
 }
 
@@ -591,6 +779,617 @@ fn list_local_models() -> Result<()> {
 }
 
 #[cfg(not(coverage))]
+fn read_benchmark_manifest(fixtures: &Path, selected: &[String]) -> Result<Vec<BenchmarkCase>> {
+    let manifest = fixtures.join("manifest.tsv");
+    let text = fs::read_to_string(&manifest)
+        .with_context(|| format!("failed to read benchmark manifest {}", manifest.display()))?;
+    let selected = selected.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut cases = Vec::new();
+
+    for (line_index, line) in text.lines().enumerate() {
+        if line_index == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let columns = line.split('\t').collect::<Vec<_>>();
+        if columns.len() < 4 {
+            bail!("invalid benchmark manifest line {}: {line}", line_index + 1);
+        }
+        if !selected.is_empty() && !selected.contains(&columns[0]) {
+            continue;
+        }
+        cases.push(BenchmarkCase {
+            id: columns[0].to_string(),
+            language: columns[1].to_string(),
+            expected_text: fixtures.join(columns[2]),
+            audio_file: fixtures.join(columns[3]),
+        });
+    }
+
+    Ok(cases)
+}
+
+#[cfg(not(coverage))]
+fn benchmark_configs(args: &BenchmarkArgs) -> Result<Vec<BenchmarkConfig>> {
+    let models = benchmark_model_candidates(args)?;
+    let chunk_seconds = parse_f32_candidates(&args.chunk_seconds, "--chunk-seconds")?;
+    let whisper_no_context =
+        parse_bool_candidates(&args.whisper_no_context, "--whisper-no-context")?;
+    let whisper_single_segment =
+        parse_bool_candidates(&args.whisper_single_segment, "--whisper-single-segment")?;
+    let whisper_best_of = parse_i32_candidates(&args.whisper_best_of, "--whisper-best-of")?;
+    let silence_threshold = parse_f32_candidates(&args.silence_threshold, "--silence-threshold")?;
+    let languages = parse_optional_string_candidates(&args.language);
+    let ollama_models = parse_optional_string_candidates(&args.ollama_model);
+    let ollama_last_lines = parse_optional_usize_candidates(&args.ollama_context_file_last_lines)?;
+
+    let mut configs = Vec::new();
+    for (model_label, model_path) in models {
+        for chunk_seconds in &chunk_seconds {
+            for no_context in &whisper_no_context {
+                for single_segment in &whisper_single_segment {
+                    for best_of in &whisper_best_of {
+                        for silence_threshold in &silence_threshold {
+                            let whisper = build_whisper_options(
+                                *no_context,
+                                *single_segment,
+                                *best_of,
+                                *silence_threshold,
+                            )?;
+                            for language in &languages {
+                                for ollama_model in &ollama_models {
+                                    for last_lines in &ollama_last_lines {
+                                        configs.push(BenchmarkConfig {
+                                            model_label: model_label.clone(),
+                                            model_path: model_path.clone(),
+                                            chunk_seconds: *chunk_seconds,
+                                            language: language.clone(),
+                                            ollama_model: ollama_model.clone(),
+                                            ollama_context_file_last_lines: *last_lines,
+                                            whisper,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(configs)
+}
+
+#[cfg(not(coverage))]
+fn benchmark_model_candidates(args: &BenchmarkArgs) -> Result<Vec<(String, PathBuf)>> {
+    if args.model.is_some() && args.model_name.is_some() {
+        bail!("--model and --model-name cannot be used together");
+    }
+
+    if let Some(path) = args.model.as_ref() {
+        ensure_model_file(path)?;
+        return Ok(vec![(path.display().to_string(), path.clone())]);
+    }
+
+    let names = args
+        .model_name
+        .as_deref()
+        .map(parse_optional_string_candidates)
+        .unwrap_or_else(|| vec![Some("default".to_string())]);
+    let mut models = Vec::new();
+    for name in names {
+        match name.as_deref() {
+            None | Some("default") => {
+                let path = default_model_path()?;
+                ensure_model_file(&path)?;
+                models.push(("default".to_string(), path));
+            }
+            Some(name) => {
+                let spec = resolve_model_spec(name)?;
+                let path = model_cache_dir()?.join(spec.file_name);
+                ensure_model_file_from_spec(spec, &path)?;
+                models.push((spec.name.to_string(), path));
+            }
+        }
+    }
+    Ok(models)
+}
+
+#[cfg(not(coverage))]
+fn parse_optional_string_candidates(input: &str) -> Vec<Option<String>> {
+    input
+        .split(',')
+        .map(str::trim)
+        .map(|value| {
+            if value.is_empty()
+                || value.eq_ignore_ascii_case("none")
+                || value.eq_ignore_ascii_case("null")
+                || value.eq_ignore_ascii_case("fixture")
+            {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn parse_f32_candidates(input: &str, option: &str) -> Result<Vec<f32>> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            let parsed = value
+                .parse::<f32>()
+                .with_context(|| format!("invalid {option} value '{value}'"))?;
+            if parsed <= 0.0 {
+                bail!("{option} values must be greater than 0");
+            }
+            Ok(parsed)
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn parse_i32_candidates(input: &str, option: &str) -> Result<Vec<i32>> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            let parsed = value
+                .parse::<i32>()
+                .with_context(|| format!("invalid {option} value '{value}'"))?;
+            if parsed <= 0 {
+                bail!("{option} values must be greater than 0");
+            }
+            Ok(parsed)
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn parse_bool_candidates(input: &str, option: &str) -> Result<Vec<bool>> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| match value.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "1" | "on" => Ok(true),
+            "false" | "no" | "0" | "off" => Ok(false),
+            _ => bail!("invalid {option} value '{value}'; use true or false"),
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn parse_optional_usize_candidates(input: &str) -> Result<Vec<Option<usize>>> {
+    input
+        .split(',')
+        .map(str::trim)
+        .map(|value| {
+            if value.is_empty()
+                || value.eq_ignore_ascii_case("none")
+                || value.eq_ignore_ascii_case("null")
+            {
+                return Ok(None);
+            }
+            let parsed = value.parse::<usize>().with_context(|| {
+                format!("invalid --ollama-context-file-last-lines value '{value}'")
+            })?;
+            if parsed == 0 {
+                bail!("--ollama-context-file-last-lines values must be greater than 0");
+            }
+            Ok(Some(parsed))
+        })
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn run_benchmark_config(
+    index: usize,
+    args: &BenchmarkArgs,
+    cases: &[BenchmarkCase],
+    config: BenchmarkConfig,
+    root_output_dir: &Path,
+) -> Result<BenchmarkRunResult> {
+    let output_dir = root_output_dir.join(format!("run-{index:03}"));
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    let context_file = benchmark_context_file(args);
+    let ollama_context_file = benchmark_ollama_context_file(args, config.ollama_model.as_deref());
+    let mut effective_config = config;
+    let mut ollama_correction = build_ollama_correction(
+        effective_config.ollama_model.as_deref(),
+        &args.ollama_url,
+        None,
+        ollama_context_file.as_deref(),
+        effective_config.ollama_context_file_last_lines,
+        args.ollama_prompt.as_deref(),
+    )?;
+
+    let mut case_results = Vec::new();
+    let mut total_chars = 0;
+    let mut total_distance = 0;
+
+    for case in cases {
+        let result = run_benchmark_case(
+            args,
+            case,
+            &effective_config,
+            context_file.as_deref(),
+            ollama_correction.as_ref(),
+            &output_dir,
+        )?;
+        if result
+            .message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("Ollama correction skipped:"))
+        {
+            ollama_correction = None;
+            effective_config.ollama_model = None;
+            effective_config.ollama_context_file_last_lines = None;
+        }
+        if result.status == "OK" {
+            total_chars += result.expected_chars;
+            total_distance += result.distance;
+        }
+        case_results.push(result);
+    }
+
+    let accuracy = if total_chars == 0 {
+        0.0
+    } else {
+        (1.0 - total_distance as f32 / total_chars as f32).max(0.0)
+    };
+    write_benchmark_run_summary(&case_results, &output_dir, accuracy)?;
+
+    Ok(BenchmarkRunResult {
+        index,
+        config: effective_config,
+        output_dir,
+        cases: case_results,
+        accuracy,
+    })
+}
+
+#[cfg(not(coverage))]
+fn run_benchmark_case(
+    args: &BenchmarkArgs,
+    case: &BenchmarkCase,
+    config: &BenchmarkConfig,
+    context_file: Option<&Path>,
+    ollama_correction: Option<&OllamaCorrection>,
+    output_dir: &Path,
+) -> Result<BenchmarkCaseResult> {
+    let Some(audio_path) = resolve_benchmark_audio(case) else {
+        if args.require_audio {
+            bail!("missing audio for {}", case.id);
+        }
+        return Ok(BenchmarkCaseResult {
+            case_id: case.id.clone(),
+            language: case.language.clone(),
+            status: "SKIP".to_string(),
+            expected_chars: 0,
+            distance: 0,
+            accuracy: 0.0,
+            message: Some(format!("missing audio for {}", case.id)),
+        });
+    };
+
+    let wav_path = ensure_benchmark_wav(&audio_path, output_dir, args.keep_wav)?;
+    let language = resolve_language(config.language.as_deref().unwrap_or(case.language.as_str()))?;
+    let initial_prompt = build_initial_prompt(None, context_file)?;
+    let (samples, sample_rate) = read_wav_mono(&wav_path)?;
+    if !args.keep_wav && wav_path != audio_path {
+        let _ = fs::remove_file(&wav_path);
+    }
+    let mut transcript = Vec::new();
+    let mut message = None;
+    for text in transcribe_samples(
+        config.model_path.clone(),
+        language,
+        initial_prompt,
+        config.whisper,
+        sample_rate,
+        samples,
+        config.chunk_seconds,
+    )? {
+        match prepare_transcript_text(&text, ollama_correction) {
+            Ok(Some(text)) => transcript.push(text),
+            Ok(None) => {}
+            Err(err) => {
+                message.get_or_insert_with(|| format!("Ollama correction skipped: {err:#}"));
+                let text = text.trim();
+                if !text.is_empty() {
+                    transcript.push(text.to_string());
+                }
+            }
+        }
+    }
+
+    let actual = transcript.join("\n");
+    let actual_path = output_dir.join(format!("{}.actual.txt", case.id));
+    fs::write(&actual_path, format!("{actual}\n"))
+        .with_context(|| format!("failed to write {}", actual_path.display()))?;
+
+    let expected = fs::read_to_string(&case.expected_text)
+        .with_context(|| format!("failed to read {}", case.expected_text.display()))?;
+    let expected_normalized = normalize_for_accuracy(
+        &expected,
+        args.preserve_case,
+        args.keep_punctuation,
+        args.keep_whitespace,
+    );
+    let actual_normalized = normalize_for_accuracy(
+        &actual,
+        args.preserve_case,
+        args.keep_punctuation,
+        args.keep_whitespace,
+    );
+    let distance = edit_distance(&expected_normalized, &actual_normalized);
+    let expected_chars = expected_normalized.chars().count();
+    let accuracy = if expected_chars == 0 {
+        0.0
+    } else {
+        (1.0 - distance as f32 / expected_chars as f32).max(0.0)
+    };
+
+    Ok(BenchmarkCaseResult {
+        case_id: case.id.clone(),
+        language: case.language.clone(),
+        status: "OK".to_string(),
+        expected_chars,
+        distance,
+        accuracy,
+        message,
+    })
+}
+
+#[cfg(not(coverage))]
+fn benchmark_context_file(args: &BenchmarkArgs) -> Option<PathBuf> {
+    if args.no_context {
+        return None;
+    }
+    let path = args
+        .context_file
+        .clone()
+        .unwrap_or_else(|| args.fixtures.join("context.txt"));
+    path.exists().then_some(path)
+}
+
+#[cfg(not(coverage))]
+fn benchmark_ollama_context_file(
+    args: &BenchmarkArgs,
+    ollama_model: Option<&str>,
+) -> Option<PathBuf> {
+    ollama_model?;
+    let path = args
+        .ollama_context_file
+        .clone()
+        .unwrap_or_else(|| args.fixtures.join("context.txt"));
+    path.exists().then_some(path)
+}
+
+#[cfg(not(coverage))]
+fn resolve_benchmark_audio(case: &BenchmarkCase) -> Option<PathBuf> {
+    if case.audio_file.exists() {
+        return Some(case.audio_file.clone());
+    }
+    let parent = case.audio_file.parent()?;
+    let stem = case.audio_file.file_stem()?.to_str()?;
+    for extension in ["wav", "m4a", "mp3", "aac", "flac"] {
+        let candidate = parent.join(format!("{stem}.{extension}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(not(coverage))]
+fn ensure_benchmark_wav(audio_path: &Path, output_dir: &Path, keep_wav: bool) -> Result<PathBuf> {
+    if audio_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+    {
+        return Ok(audio_path.to_path_buf());
+    }
+
+    let wav_dir = output_dir.join(if keep_wav { "wav" } else { "tmp-wav" });
+    fs::create_dir_all(&wav_dir)
+        .with_context(|| format!("failed to create {}", wav_dir.display()))?;
+    let wav_path = wav_dir.join(format!(
+        "{}.wav",
+        audio_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| anyhow!("invalid audio file name {}", audio_path.display()))?
+    ));
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(audio_path)
+        .args(["-ac", "1", "-ar", "16000"])
+        .arg(&wav_path)
+        .status()
+        .context("failed to run ffmpeg; install ffmpeg to benchmark non-WAV audio")?;
+    if !status.success() {
+        bail!("ffmpeg failed to convert {}", audio_path.display());
+    }
+    Ok(wav_path)
+}
+
+#[cfg(not(coverage))]
+fn normalize_for_accuracy(
+    text: &str,
+    preserve_case: bool,
+    keep_punctuation: bool,
+    keep_whitespace: bool,
+) -> String {
+    let text = if preserve_case {
+        text.to_string()
+    } else {
+        text.to_lowercase()
+    };
+    text.chars()
+        .filter(|ch| keep_whitespace || !ch.is_whitespace())
+        .filter(|ch| keep_punctuation || !is_punctuation(*ch))
+        .collect()
+}
+
+#[cfg(not(coverage))]
+fn is_punctuation(ch: char) -> bool {
+    ch.is_ascii_punctuation()
+        || matches!(
+            ch,
+            '，' | '。'
+                | '、'
+                | '；'
+                | '：'
+                | '？'
+                | '！'
+                | '（'
+                | '）'
+                | '《'
+                | '》'
+                | '“'
+                | '”'
+                | '‘'
+                | '’'
+                | '«'
+                | '»'
+        )
+}
+
+#[cfg(not(coverage))]
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left = left.chars().collect::<Vec<_>>();
+    let right = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    for (i, left_char) in left.iter().enumerate() {
+        let mut current = vec![i + 1];
+        for (j, right_char) in right.iter().enumerate() {
+            current.push(
+                (previous[j + 1] + 1)
+                    .min(current[j] + 1)
+                    .min(previous[j] + usize::from(left_char != right_char)),
+            );
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
+
+#[cfg(not(coverage))]
+fn write_benchmark_run_summary(
+    cases: &[BenchmarkCaseResult],
+    output_dir: &Path,
+    accuracy: f32,
+) -> Result<()> {
+    let path = output_dir.join("summary.tsv");
+    let mut file = BufWriter::new(File::create(&path)?);
+    writeln!(
+        file,
+        "id\tlanguage\tstatus\texpected_chars\tedit_distance\taccuracy_percent\tmessage"
+    )?;
+    for case in cases {
+        writeln!(
+            file,
+            "{}\t{}\t{}\t{}\t{}\t{:.2}\t{}",
+            case.case_id,
+            case.language,
+            case.status,
+            case.expected_chars,
+            case.distance,
+            case.accuracy * 100.0,
+            case.message.as_deref().unwrap_or("")
+        )?;
+    }
+    writeln!(file, "TOTAL\t\t\t\t\t{:.2}\t", accuracy * 100.0)?;
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn write_benchmark_summary(results: &[BenchmarkRunResult], output_dir: &Path) -> Result<()> {
+    let path = output_dir.join("summary.tsv");
+    let mut ranked = results.iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.accuracy.total_cmp(&left.accuracy));
+    let mut file = BufWriter::new(File::create(&path)?);
+    writeln!(
+        file,
+        "rank\trun\taccuracy_percent\tmodel\tchunk_seconds\tlanguage\tollama_model\tollama_context_file_last_lines\twhisper_no_context\twhisper_single_segment\twhisper_best_of\tsilence_threshold\toutput_dir"
+    )?;
+    for (rank, result) in ranked.iter().enumerate() {
+        writeln!(
+            file,
+            "{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            rank + 1,
+            result.index,
+            result.accuracy * 100.0,
+            result.config.model_label,
+            result.config.chunk_seconds,
+            result.config.language.as_deref().unwrap_or("fixture"),
+            result.config.ollama_model.as_deref().unwrap_or("none"),
+            result
+                .config
+                .ollama_context_file_last_lines
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            result.config.whisper.no_context,
+            result.config.whisper.single_segment,
+            result.config.whisper.best_of,
+            result.config.whisper.silence_threshold,
+            result.output_dir.display()
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn print_benchmark_run(result: &BenchmarkRunResult) {
+    println!(
+        "#{:03} accuracy={:.2}% model={} chunk={} language={} ollama={} no_context={} single_segment={} best_of={} silence={} output={}",
+        result.index,
+        result.accuracy * 100.0,
+        result.config.model_label,
+        result.config.chunk_seconds,
+        result.config.language.as_deref().unwrap_or("fixture"),
+        result.config.ollama_model.as_deref().unwrap_or("none"),
+        result.config.whisper.no_context,
+        result.config.whisper.single_segment,
+        result.config.whisper.best_of,
+        result.config.whisper.silence_threshold,
+        result.output_dir.display()
+    );
+    for case in &result.cases {
+        println!(
+            "  {:<32} {:<5} {:<5} {:>7} chars {:>6} edits {:>7.2}%",
+            case.case_id,
+            case.language,
+            case.status,
+            case.expected_chars,
+            case.distance,
+            case.accuracy * 100.0
+        );
+        if let Some(message) = case.message.as_deref() {
+            println!("    {message}");
+        }
+    }
+}
+
+#[cfg(not(coverage))]
+fn timestamp_id() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    seconds.to_string()
+}
+
+#[cfg(not(coverage))]
 fn record(args: RecordArgs) -> Result<()> {
     if args.append && args.output.is_none() {
         bail!("--append requires --output <FILE>");
@@ -607,6 +1406,12 @@ fn record(args: RecordArgs) -> Result<()> {
         args.ollama_context_file_last_lines,
         args.ollama_prompt.as_deref(),
     )?;
+    let whisper_options = build_whisper_options(
+        args.whisper_no_context,
+        args.whisper_single_segment,
+        args.whisper_best_of,
+        args.silence_threshold,
+    )?;
     let chunk_seconds = args.chunk_seconds.max(1.0);
     let host = cpal::default_host();
     let input_devices = collect_input_devices(&host)?;
@@ -617,8 +1422,8 @@ fn record(args: RecordArgs) -> Result<()> {
     let stream_config: StreamConfig = selected.config.clone().into();
     let chunk_frames = ((sample_rate as f32 * chunk_seconds).round() as usize).max(1);
 
-    let model_path = args.model.unwrap_or(default_model_path()?);
-    ensure_model_file(&model_path)?;
+    let model_path =
+        resolve_transcription_model(args.model.as_deref(), args.model_name.as_deref())?;
 
     let mut output_writer = open_output_writer(args.output.as_deref(), args.append)?;
 
@@ -641,6 +1446,7 @@ fn record(args: RecordArgs) -> Result<()> {
             worker_model_path,
             worker_language,
             worker_initial_prompt,
+            whisper_options,
             sample_rate,
             chunk_rx,
             text_tx,
@@ -752,6 +1558,13 @@ fn record(args: RecordArgs) -> Result<()> {
         args.ollama_context_file_last_lines,
         args.ollama_prompt.as_deref(),
     )?;
+    build_whisper_options(
+        args.whisper_no_context,
+        args.whisper_single_segment,
+        args.whisper_best_of,
+        args.silence_threshold,
+    )?;
+    resolve_transcription_model(args.model.as_deref(), args.model_name.as_deref())?;
     Ok(())
 }
 
@@ -772,36 +1585,18 @@ fn transcribe_file(args: TranscribeFileArgs) -> Result<()> {
         args.ollama_context_file_last_lines,
         args.ollama_prompt.as_deref(),
     )?;
+    let whisper_options = build_whisper_options(
+        args.whisper_no_context,
+        args.whisper_single_segment,
+        args.whisper_best_of,
+        args.silence_threshold,
+    )?;
     let chunk_seconds = args.chunk_seconds.max(1.0);
-    let model_path = args.model.unwrap_or(default_model_path()?);
-    ensure_model_file(&model_path)?;
+    let model_path =
+        resolve_transcription_model(args.model.as_deref(), args.model_name.as_deref())?;
 
     let mut output_writer = open_output_writer(args.output.as_deref(), args.append)?;
     let (samples, sample_rate) = read_wav_mono(&args.input)?;
-    let chunk_frames = ((sample_rate as f32 * chunk_seconds).round() as usize).max(1);
-
-    let (chunk_tx, chunk_rx) = mpsc::sync_channel::<Vec<f32>>(4);
-    let (text_tx, text_rx) = mpsc::channel::<String>();
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
-
-    let worker_model_path = model_path.clone();
-    let worker_language = language.clone();
-    let worker_initial_prompt = initial_prompt.clone();
-    let worker = thread::spawn(move || {
-        transcription_worker(
-            worker_model_path,
-            worker_language,
-            worker_initial_prompt,
-            sample_rate,
-            chunk_rx,
-            text_tx,
-            ready_tx,
-        )
-    });
-
-    ready_rx
-        .recv()
-        .context("transcription worker did not signal readiness")??;
 
     eprintln!(
         "Transcribing file: {} @ {} Hz",
@@ -816,19 +1611,73 @@ fn transcribe_file(args: TranscribeFileArgs) -> Result<()> {
         );
     }
 
+    for text in transcribe_samples(
+        model_path,
+        language,
+        initial_prompt,
+        whisper_options,
+        sample_rate,
+        samples,
+        chunk_seconds,
+    )? {
+        emit_transcript(&text, &mut output_writer, ollama_correction.as_ref())?;
+    }
+
+    if let Some(writer) = output_writer.as_mut() {
+        writer.flush().context("failed to flush output file")?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn transcribe_samples(
+    model_path: PathBuf,
+    language: Option<String>,
+    initial_prompt: Option<String>,
+    whisper_options: WhisperOptions,
+    sample_rate: u32,
+    samples: Vec<f32>,
+    chunk_seconds: f32,
+) -> Result<Vec<String>> {
+    let chunk_frames = ((sample_rate as f32 * chunk_seconds).round() as usize).max(1);
+    let (chunk_tx, chunk_rx) = mpsc::sync_channel::<Vec<f32>>(4);
+    let (text_tx, text_rx) = mpsc::channel::<String>();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
+
+    let worker = thread::spawn(move || {
+        transcription_worker(
+            model_path,
+            language,
+            initial_prompt,
+            whisper_options,
+            sample_rate,
+            chunk_rx,
+            text_tx,
+            ready_tx,
+        )
+    });
+
+    ready_rx
+        .recv()
+        .context("transcription worker did not signal readiness")??;
+
+    let mut transcripts = Vec::new();
     for chunk in samples.chunks(chunk_frames) {
         if !chunk.is_empty() {
             chunk_tx
                 .send(chunk.to_vec())
                 .context("failed to queue audio chunk")?;
         }
-        drain_transcripts(&text_rx, &mut output_writer, ollama_correction.as_ref())?;
+        while let Ok(text) = text_rx.try_recv() {
+            transcripts.push(text);
+        }
     }
     drop(chunk_tx);
 
     loop {
         match text_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(text) => emit_transcript(&text, &mut output_writer, ollama_correction.as_ref())?,
+            Ok(text) => transcripts.push(text),
             Err(RecvTimeoutError::Timeout) => {
                 if worker.is_finished() {
                     break;
@@ -841,13 +1690,24 @@ fn transcribe_file(args: TranscribeFileArgs) -> Result<()> {
     worker
         .join()
         .map_err(|_| anyhow!("transcription worker panicked"))??;
-    drain_transcripts(&text_rx, &mut output_writer, ollama_correction.as_ref())?;
-
-    if let Some(writer) = output_writer.as_mut() {
-        writer.flush().context("failed to flush output file")?;
+    while let Ok(text) = text_rx.try_recv() {
+        transcripts.push(text);
     }
 
-    Ok(())
+    Ok(transcripts)
+}
+
+#[cfg(coverage)]
+fn transcribe_samples(
+    _model_path: PathBuf,
+    _language: Option<String>,
+    _initial_prompt: Option<String>,
+    _whisper_options: WhisperOptions,
+    _sample_rate: u32,
+    _samples: Vec<f32>,
+    _chunk_seconds: f32,
+) -> Result<Vec<String>> {
+    Ok(Vec::new())
 }
 
 #[cfg(coverage)]
@@ -866,7 +1726,94 @@ fn transcribe_file(args: TranscribeFileArgs) -> Result<()> {
         args.ollama_context_file_last_lines,
         args.ollama_prompt.as_deref(),
     )?;
+    build_whisper_options(
+        args.whisper_no_context,
+        args.whisper_single_segment,
+        args.whisper_best_of,
+        args.silence_threshold,
+    )?;
+    resolve_transcription_model(args.model.as_deref(), args.model_name.as_deref())?;
     read_wav_mono(&args.input)?;
+    Ok(())
+}
+
+#[cfg(not(coverage))]
+fn benchmark(args: BenchmarkArgs) -> Result<()> {
+    let cases = read_benchmark_manifest(&args.fixtures, &args.cases)?;
+    if cases.is_empty() {
+        bail!("no benchmark cases selected");
+    }
+
+    let configs = benchmark_configs(&args)?;
+    let run_dir = args.output_dir.join(timestamp_id());
+    fs::create_dir_all(&run_dir)
+        .with_context(|| format!("failed to create benchmark directory {}", run_dir.display()))?;
+
+    println!("Benchmark cases: {}", cases.len());
+    println!("Parameter combinations: {}", configs.len());
+    println!("Output dir: {}", run_dir.display());
+    println!();
+
+    let mut results = Vec::new();
+    for (index, config) in configs.into_iter().enumerate() {
+        let result = run_benchmark_config(index + 1, &args, &cases, config, &run_dir)?;
+        print_benchmark_run(&result);
+        results.push(result);
+    }
+
+    write_benchmark_summary(&results, &run_dir)?;
+    let best = results
+        .iter()
+        .max_by(|left, right| left.accuracy.total_cmp(&right.accuracy))
+        .ok_or_else(|| anyhow!("no benchmark results produced"))?;
+
+    println!();
+    println!("Best configuration:");
+    println!("  run: #{:03}", best.index);
+    println!("  accuracy: {:.2}%", best.accuracy * 100.0);
+    println!("  model: {}", best.config.model_label);
+    println!("  chunk_seconds: {}", best.config.chunk_seconds);
+    println!(
+        "  language: {}",
+        best.config.language.as_deref().unwrap_or("fixture")
+    );
+    println!(
+        "  ollama_model: {}",
+        best.config.ollama_model.as_deref().unwrap_or("none")
+    );
+    println!(
+        "  ollama_context_file_last_lines: {}",
+        best.config
+            .ollama_context_file_last_lines
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    println!("  whisper_no_context: {}", best.config.whisper.no_context);
+    println!(
+        "  whisper_single_segment: {}",
+        best.config.whisper.single_segment
+    );
+    println!("  whisper_best_of: {}", best.config.whisper.best_of);
+    println!(
+        "  silence_threshold: {}",
+        best.config.whisper.silence_threshold
+    );
+
+    if let Some(fail_under) = args.fail_under {
+        if best.accuracy * 100.0 < fail_under {
+            bail!(
+                "best accuracy {:.2}% is below --fail-under {:.2}%",
+                best.accuracy * 100.0,
+                fail_under
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(coverage)]
+fn benchmark(_args: BenchmarkArgs) -> Result<()> {
     Ok(())
 }
 
@@ -1011,6 +1958,7 @@ fn transcription_worker(
     model_path: PathBuf,
     language: Option<String>,
     initial_prompt: Option<String>,
+    whisper_options: WhisperOptions,
     input_sample_rate: u32,
     chunk_rx: Receiver<Vec<f32>>,
     text_tx: mpsc::Sender<String>,
@@ -1028,7 +1976,7 @@ fn transcription_worker(
                 .create_state()
                 .context("failed to create whisper state")?;
             for chunk in chunk_rx {
-                if rms_level(&chunk) < SILENCE_RMS_THRESHOLD {
+                if rms_level(&chunk) < whisper_options.silence_threshold {
                     continue;
                 }
 
@@ -1041,6 +1989,7 @@ fn transcription_worker(
                     &mut state,
                     language.as_deref(),
                     initial_prompt.as_deref(),
+                    whisper_options,
                     &resampled,
                 )?;
                 if !text.is_empty() {
@@ -1061,13 +2010,16 @@ fn transcribe_chunk(
     state: &mut whisper_rs::WhisperState,
     language: Option<&str>,
     initial_prompt: Option<&str>,
+    whisper_options: WhisperOptions,
     samples: &[f32],
 ) -> Result<String> {
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    let mut params = FullParams::new(SamplingStrategy::Greedy {
+        best_of: whisper_options.best_of,
+    });
     params.set_n_threads(decoder_threads());
     params.set_translate(false);
-    params.set_no_context(true);
-    params.set_single_segment(true);
+    params.set_no_context(whisper_options.no_context);
+    params.set_single_segment(whisper_options.single_segment);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -1203,23 +2155,9 @@ fn emit_transcript(
     output_writer: &mut Option<BufWriter<File>>,
     ollama_correction: Option<&OllamaCorrection>,
 ) -> Result<()> {
-    let text = text.trim();
-    if text.is_empty() {
+    let Some(text) = prepare_transcript_text(text, ollama_correction)? else {
         return Ok(());
-    }
-
-    let corrected;
-    let text = match ollama_correction {
-        Some(correction) => {
-            corrected = correction.correct(text)?;
-            corrected.trim()
-        }
-        None => text,
     };
-    if text.is_empty() {
-        return Ok(());
-    }
-
     println!("{text}");
     io::stdout().flush().context("failed to flush stdout")?;
 
@@ -1229,6 +2167,23 @@ fn emit_transcript(
     }
 
     Ok(())
+}
+
+fn prepare_transcript_text(
+    text: &str,
+    ollama_correction: Option<&OllamaCorrection>,
+) -> Result<Option<String>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+
+    let text = match ollama_correction {
+        Some(correction) => correction.correct(text)?,
+        None => text.to_string(),
+    };
+    let text = text.trim().to_string();
+    Ok((!text.is_empty()).then_some(text))
 }
 
 impl OllamaCorrection {
@@ -1484,6 +2439,75 @@ fn build_ollama_correction(
     }))
 }
 
+fn build_whisper_options(
+    no_context: bool,
+    single_segment: bool,
+    best_of: i32,
+    silence_threshold: f32,
+) -> Result<WhisperOptions> {
+    if best_of <= 0 {
+        bail!("--whisper-best-of must be greater than 0");
+    }
+    if silence_threshold < 0.0 {
+        bail!("--silence-threshold cannot be negative");
+    }
+    if !silence_threshold.is_finite() {
+        bail!("--silence-threshold must be finite");
+    }
+    Ok(WhisperOptions {
+        no_context,
+        single_segment,
+        best_of,
+        silence_threshold,
+    })
+}
+
+fn resolve_transcription_model(model: Option<&Path>, model_name: Option<&str>) -> Result<PathBuf> {
+    if model.is_some() && model_name.is_some() {
+        bail!("--model and --model-name cannot be used together");
+    }
+
+    if let Some(name) = model_name {
+        return resolve_model_name_path(name);
+    }
+
+    let Some(path) = model else {
+        let path = default_model_path()?;
+        ensure_model_file(&path)?;
+        return Ok(path);
+    };
+
+    if path.exists() || looks_like_path(path) {
+        ensure_model_file(path)?;
+        return Ok(path.to_path_buf());
+    }
+
+    if let Some(value) = path.to_str() {
+        return resolve_model_name_path(value);
+    }
+
+    ensure_model_file(path)?;
+    Ok(path.to_path_buf())
+}
+
+fn resolve_model_name_path(name: &str) -> Result<PathBuf> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+        let path = default_model_path()?;
+        ensure_model_file(&path)?;
+        return Ok(path);
+    }
+
+    let spec = resolve_model_spec(trimmed)?;
+    let path = model_cache_dir()?.join(spec.file_name);
+    ensure_model_file_from_spec(spec, &path)?;
+    Ok(path)
+}
+
+fn looks_like_path(path: &Path) -> bool {
+    path.components().count() > 1 || path.extension().is_some()
+}
+
 fn default_model_path() -> Result<PathBuf> {
     Ok(model_cache_dir()?.join(DEFAULT_MODEL_NAME))
 }
@@ -1525,6 +2549,7 @@ fn ensure_model_file_from_spec(spec: &ModelSpec, path: &Path) -> Result<()> {
 fn download_model_file(spec: &ModelSpec, path: &Path) -> Result<()> {
     let parent = path
         .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| anyhow!("model path {} has no parent directory", path.display()))?;
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create model directory {}", parent.display()))?;
@@ -1575,6 +2600,7 @@ pass --model /path/to/ggml-*.bin to use a local whisper.cpp model",
 fn download_model_file(_spec: &ModelSpec, path: &Path) -> Result<()> {
     let parent = path
         .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| anyhow!("model path {} has no parent directory", path.display()))?;
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create model directory {}", parent.display()))?;
@@ -1996,12 +3022,24 @@ mod tests {
             "qwen",
             "--chunk-seconds",
             "10",
+            "--whisper-no-context",
+            "false",
+            "--whisper-single-segment",
+            "false",
+            "--whisper-best-of",
+            "3",
+            "--silence-threshold",
+            "0.001",
         ])?;
         match cli.command {
             Commands::Record(args) => {
                 assert_eq!(args.language, "zh");
                 assert_eq!(args.ollama_model, Some("qwen".to_string()));
                 assert_eq!(args.chunk_seconds, 10.0);
+                assert!(!args.whisper_no_context);
+                assert!(!args.whisper_single_segment);
+                assert_eq!(args.whisper_best_of, 3);
+                assert_eq!(args.silence_threshold, 0.001);
             }
             _ => panic!("expected record command"),
         }
@@ -2026,6 +3064,18 @@ mod tests {
     }
 
     #[test]
+    fn builds_and_validates_whisper_options() -> Result<()> {
+        let options = build_whisper_options(false, true, 3, 0.001)?;
+        assert!(!options.no_context);
+        assert!(options.single_segment);
+        assert_eq!(options.best_of, 3);
+        assert_eq!(options.silence_threshold, 0.001);
+        assert!(build_whisper_options(true, true, 0, 0.001).is_err());
+        assert!(build_whisper_options(true, true, 1, -0.001).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn command_handlers_return_expected_early_errors() {
         let record_args = RecordArgs {
             input: "default".to_string(),
@@ -2041,7 +3091,12 @@ mod tests {
             ollama_context_file_last_lines: None,
             ollama_prompt: None,
             model: None,
+            model_name: None,
             chunk_seconds: DEFAULT_CHUNK_SECONDS,
+            whisper_no_context: true,
+            whisper_single_segment: true,
+            whisper_best_of: 1,
+            silence_threshold: SILENCE_RMS_THRESHOLD,
         };
         assert!(record(record_args).is_err());
 
@@ -2059,7 +3114,12 @@ mod tests {
             ollama_context_file_last_lines: None,
             ollama_prompt: None,
             model: None,
+            model_name: None,
             chunk_seconds: DEFAULT_CHUNK_SECONDS,
+            whisper_no_context: true,
+            whisper_single_segment: true,
+            whisper_best_of: 1,
+            silence_threshold: SILENCE_RMS_THRESHOLD,
         };
         assert!(transcribe_file(transcribe_args).is_err());
     }

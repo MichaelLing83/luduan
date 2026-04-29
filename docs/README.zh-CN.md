@@ -100,8 +100,22 @@ luduan record \
 ```bash
 luduan transcribe-file ./tests/fixtures/audio/case01.wav \
   -l zh \
-  --model /path/to/ggml-large-v3.bin \
+  --model-name large-v3 \
   -f ./terms.txt
+```
+
+遍历参数组合，找出测试集上的最佳转写配置：
+
+```bash
+luduan benchmark \
+  --fixtures tests/fixtures/e2e \
+  --model-name large-v3,large-v3-turbo \
+  --chunk-seconds 5,10 \
+  --whisper-no-context true,false \
+  --whisper-single-segment true,false \
+  --whisper-best-of 1,3 \
+  --silence-threshold 0.001,0.003 \
+  --ollama-model none,qwen2.5:7b
 ```
 
 ## `record` 特性
@@ -116,6 +130,8 @@ luduan transcribe-file ./tests/fixtures/audio/case01.wav \
 - Ollama 上下文文件较大时，可只读取最后 N 个非空行
 - 可通过 `--ollama-prompt` 覆盖默认修正指令
 - `transcribe-file` 支持同一组转写、输出和 Ollama 修正参数，用于可复现地调试 WAV 音频样本
+- `record` 和 `transcribe-file` 可调整 Whisper 的 `--whisper-no-context`、`--whisper-single-segment`、`--whisper-best-of` 和 `--silence-threshold`
+- `benchmark` 可以读取 fixture 音频，遍历模型、chunk 时长、Whisper 参数、Ollama 等候选参数并输出最佳组合
 
 ## 模型行为
 
@@ -129,4 +145,5 @@ ggml-base.bin
 
 ```bash
 luduan record --model /path/to/ggml-*.bin
+luduan record --model-name large-v3
 ```

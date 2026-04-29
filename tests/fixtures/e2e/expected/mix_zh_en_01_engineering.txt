@@ -1,0 +1,4 @@
+今天我们测试 Luduan 的 transcribe-file 命令，输入是一段 WAV audio fixture。
+Whisper large-v3 负责 first pass transcription，Ollama 只做 conservative correction。
+请不要把 Rust、Cargo、Makefile、macOS 和 Qwen 这些词翻译成中文。
+如果模型听到 Shanghai office、GitHub repo 或 coverage report，也应该保持原来的英文表达。

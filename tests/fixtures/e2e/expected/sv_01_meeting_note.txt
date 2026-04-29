@@ -1,0 +1,4 @@
+Det här är ett svenskt test för taligenkänning i Luduan.
+Vi sitter i Stockholm och går igenom resultat från Whisper large v3.
+Anna ansvarar för ljudfilerna, Erik jämför texten, och Sara skriver rapporten.
+Målet är att kontrollera namn, platser och vanliga svenska meningar utan att lägga till extra innehåll.

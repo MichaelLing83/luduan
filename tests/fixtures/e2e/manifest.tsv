@@ -1,0 +1,2 @@
+id	language	expected_text	audio_file	notes
+hp_sv_01	sv	expected/hp_sv_01.txt	audio/hp_sv_01.wav	Harry Potter Swedish 01
