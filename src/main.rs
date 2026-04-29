@@ -185,6 +185,7 @@ const SUPPORTED_LANGUAGES: &[LanguageSpec] = &[
 
 #[derive(Parser, Debug)]
 #[command(name = "luduan")]
+#[command(version)]
 #[command(about = "Local audio device listing and streaming speech-to-text")]
 struct Cli {
     #[command(subcommand)]
@@ -208,6 +209,8 @@ enum Commands {
     TranscribeFile(TranscribeFileArgs),
     /// Benchmark transcription accuracy across fixture audio and parameter grids
     Benchmark(BenchmarkArgs),
+    /// Print the Luduan version
+    Version,
 }
 
 #[derive(Subcommand, Debug)]
@@ -619,7 +622,13 @@ fn main() -> Result<()> {
         Commands::Record(args) => record(args),
         Commands::TranscribeFile(args) => transcribe_file(args),
         Commands::Benchmark(args) => benchmark(args),
+        Commands::Version => print_version(),
     }
+}
+
+fn print_version() -> Result<()> {
+    println!("luduan {}", env!("CARGO_PKG_VERSION"));
+    Ok(())
 }
 
 fn list_devices() -> Result<()> {

@@ -1,2 +1,10 @@
 id	language	expected_text	audio_file	notes
+en_01_product_update	en	expected/en_01_product_update.txt	audio/en_01_product_update.wav	English product update
+en_02_support_note	en	expected/en_02_support_note.txt	audio/en_02_support_note.wav	English support note
 hp_sv_01	sv	expected/hp_sv_01.txt	audio/hp_sv_01.wav	Harry Potter Swedish 01
+mix_zh_en_01_engineering	auto	expected/mix_zh_en_01_engineering.txt	audio/mix_zh_en_01_engineering.wav	Mixed Chinese and English engineering
+mix_zh_en_02_names_tools	auto	expected/mix_zh_en_02_names_tools.txt	audio/mix_zh_en_02_names_tools.wav	Mixed Chinese and English names and tools
+sv_01_meeting_note	sv	expected/sv_01_meeting_note.txt	audio/sv_01_meeting_note.wav	Swedish meeting note
+sv_02_travel_plan	sv	expected/sv_02_travel_plan.txt	audio/sv_02_travel_plan.wav	Swedish travel plan
+zh_01_daily_status	zh	expected/zh_01_daily_status.txt	audio/zh_01_daily_status.wav	Chinese daily status
+zh_02_terms_and_names	zh	expected/zh_02_terms_and_names.txt	audio/zh_02_terms_and_names.wav	Chinese terms and names
