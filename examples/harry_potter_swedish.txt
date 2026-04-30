@@ -101,3 +101,7 @@ rektor
 husrektor
 Präfekt
 Sökare
+
+# Svenska faser:
+det var
+sedan
